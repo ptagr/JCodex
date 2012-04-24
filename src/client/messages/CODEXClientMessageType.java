@@ -1,0 +1,8 @@
+package client.messages;
+
+public enum CODEXClientMessageType {
+	CLIENT_READ_SECRET_REQUEST,
+	CLIENT_WRITE_SECRET_REQUEST,
+	BLINDED_READ_RESPONSE,
+	WRITE_SECRET_REPONSE
+}
