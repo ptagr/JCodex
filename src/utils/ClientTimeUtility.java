@@ -16,7 +16,7 @@ public class ClientTimeUtility {
 		this.milliSec = milliSec;
 	}
 
-	public long delta(long time) {
+	public long delta() {
 		return System.currentTimeMillis() - milliSec;
 	}
 

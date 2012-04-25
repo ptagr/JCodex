@@ -26,6 +26,7 @@ import threshsig.GroupKey;
 import utils.ClientTimeUtility;
 import utils.KeyUtility;
 import utils.SerializationUtil;
+import utils.TimeUtility;
 
 public class ClientStub {
 	private PrivateKey privateKey;
@@ -152,7 +153,7 @@ public class ClientStub {
 							// System.out.println("Original secret : "
 							// + originalSecret.toString());
 							System.out.println("Retrieved secret for dataId "+ brr.getDataId()+": "
-									+ new String(originalSecret.toByteArray()));
+									+ new String(originalSecret.toByteArray())+ " in " +ctu.delta() + " ms");
 							
 							return originalSecret;
 							

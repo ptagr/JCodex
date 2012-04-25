@@ -132,7 +132,10 @@ public class ServerThresholdKeyManager {
 
 		println(shares.length);
 
-		return SigShare.thresholdDecrypt(getMessageDigest(b), shares, gk);
+		BigInteger digitalSig =  SigShare.thresholdDecrypt(getMessageDigest(b), shares, gk);
+		if(!verifySignature(b, digitalSig))
+			return null;
+		return digitalSig;
 	}
 
 	public BigInteger thresholdSign(byte[] b, SigShare[] sigShares) {

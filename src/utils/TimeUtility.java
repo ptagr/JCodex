@@ -2,7 +2,7 @@ package utils;
 
 public class TimeUtility {
 
-	public int timeOut = 5000; // time in mSec
+	public static int timeOut = 5000; // time in mSec
 	//public static int clientTimeOut = 4*timeOut; // time in mSec
 	public long milliSec;
 
@@ -16,7 +16,7 @@ public class TimeUtility {
 		this.milliSec = milliSec;
 	}
 
-	public long delta(long time) {
+	public long delta() {
 		return System.currentTimeMillis() - milliSec;
 	}
 

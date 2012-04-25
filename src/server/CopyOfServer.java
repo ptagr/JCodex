@@ -43,7 +43,7 @@ import threshsig.SigShare;
 import utils.SerializationUtil;
 import utils.TimeUtility;
 
-public class Server implements Runnable {
+public class CopyOfServer implements Runnable {
 	private int l;
 	private int k;
 	private int t;
@@ -83,7 +83,7 @@ public class Server implements Runnable {
 	LinkedBlockingQueue<CODEXServerMessage> serverMessages = new LinkedBlockingQueue<CODEXServerMessage>(
 			10);
 
-	public Server(int k, int l, int clientPort, int serverId,
+	public CopyOfServer(int k, int l, int clientPort, int serverId,
 			Set<Integer> clientIds) {
 		this.k = k;
 		this.t = k - 1;
@@ -131,7 +131,6 @@ public class Server implements Runnable {
 	public void run() {
 		// TODO Auto-generated method stub
 		byte[] receiveData = new byte[8192];
-		TimeUtility tu = new TimeUtility();
 		while (true) {
 			DatagramPacket receivePacket = new DatagramPacket(receiveData,
 					receiveData.length);
@@ -139,9 +138,7 @@ public class Server implements Runnable {
 				println("Waiting for client messages on socket : "
 						+ clientConnectionSocket.getLocalPort());
 				this.clientConnectionSocket.receive(receivePacket);
-				tu.reset();
 				handlePacket(receivePacket);
-				System.out.println("Handled packet in "+tu.delta() + " ms");
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
