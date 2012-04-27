@@ -231,7 +231,7 @@ public class ClientStub {
 
 							String secretId = wsr.getDataId();
 							
-							System.out.println("Succesfully stored secret for dataId "+ secretId);
+							System.out.println("Succesfully stored secret for dataId "+ secretId + " in "+ctu.delta()+ " ms");
 //							BigInteger bs = brr.getBlindedSecret();
 //
 //							BigInteger originalSecret = bs.divide(bp);
