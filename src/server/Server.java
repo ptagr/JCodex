@@ -16,15 +16,19 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import main.ConnectionInfo;
+import main.Constants;
 import server.messages.BlindedReadResponse;
 import server.messages.CODEXServerMessage;
 import server.messages.CODEXServerMessageType;
 import server.messages.ForwardReadRequestAccept;
+import server.messages.ForwardWriteRequest;
 import server.messages.ForwardWriteRequestAccept;
 import server.messages.SignReadResponseRequest;
 import server.messages.SignWriteResponseRequest;
 import server.messages.SignedReadResponse;
 import server.messages.SignedWriteResponse;
+import server.messages.TimeStampRequest;
+import server.messages.TimeStampResponse;
 import server.messages.VerifiedWriteRequest;
 import server.messages.VerifyWriteRequest;
 import server.messages.WriteSecretResponse;
@@ -40,9 +44,8 @@ public class Server implements Runnable {
 	private int l;
 	private int k;
 	private int t;
-	
+
 	int quorumSize;
-	
 
 	// public static String broadcastIP = "230.0.0.1";
 
@@ -54,11 +57,11 @@ public class Server implements Runnable {
 	private ServerKeyManager skm;
 
 	private ServerThresholdKeyManager stkm;
-	
-//	private DateFormat dateFormatter = new SimpleDateFormat("ss:S");
+
+	// private DateFormat dateFormatter = new SimpleDateFormat("ss:S");
 
 	private long timer = 0;
-	
+
 	// The thread listening to incoming messages on the broadcast channel
 	private Thread bclThread;
 
@@ -71,10 +74,11 @@ public class Server implements Runnable {
 
 	private DatagramSocket serverConnectionSocket;
 
-//	ReentrantLock messageCacheLock = new ReentrantLock();
-//
-//	private LinkedHashMap<Long, Set<CODEXServerMessage>> messageCache = new AccessOrderCache<Long, Set<CODEXServerMessage>>(
-//			50);
+	// ReentrantLock messageCacheLock = new ReentrantLock();
+	//
+	// private LinkedHashMap<Long, Set<CODEXServerMessage>> messageCache = new
+	// AccessOrderCache<Long, Set<CODEXServerMessage>>(
+	// 50);
 
 	// private LinkedHashMap<Long, Object> serverCheckCache = new
 	// AccessOrderCache<Long, Object>(
@@ -88,9 +92,9 @@ public class Server implements Runnable {
 		this.k = k;
 		this.t = k - 1;
 		this.l = l;
-		
-		this.quorumSize = 2*t+1;
-		
+
+		this.quorumSize = 2 * t + 1;
+
 		this.serverId = serverId;
 		this.shareDB = new HashMap<String, SecretShare>();
 
@@ -126,8 +130,6 @@ public class Server implements Runnable {
 		}
 	}
 
-
-
 	@Override
 	public void run() {
 		// TODO Auto-generated method stub
@@ -150,7 +152,6 @@ public class Server implements Runnable {
 		}
 
 	}
-
 
 	private void handlePacket(DatagramPacket receivePacket) {
 
@@ -178,8 +179,8 @@ public class Server implements Runnable {
 					CODEXServerMessageType.FORWARD_READ_REQUEST,
 					SerializationUtil.serialize(cm));
 
-			println("Forwarding CLIENT_READ_SECRET_REQUEST message to "
-					+ l + " servers");
+			println("Forwarding CLIENT_READ_SECRET_REQUEST message to " + l
+					+ " servers");
 
 			// Make an entry in serverCheckCache of <nonce, MR(n)>
 			// serverCheckCache.put(csm.getNonce(), cm);
@@ -187,13 +188,15 @@ public class Server implements Runnable {
 			// Send messages to all servers
 			sendMessageToAllServers(csm);
 
-			HashMap<BigInteger, Set<ForwardReadRequestAccept>> evidenceMap = new HashMap<BigInteger, Set<ForwardReadRequestAccept>>();
-			Set<ForwardReadRequestAccept> evidenceSet = null;
-			BigInteger correctCipher = null;
+			// Now wait for a quorum number of messages
+			HashMap<SecretShare, Set<ForwardReadRequestAccept>> evidenceMap = new HashMap<SecretShare, Set<ForwardReadRequestAccept>>();
 			tu.reset();
+			int messagesReceived = 0;
 			while (tu.timerHasNotExpired()) {
 				CODEXServerMessage csmtemp;
 				try {
+					if (messagesReceived == quorumSize)
+						break;
 					csmtemp = serverMessages.poll(TimeUtility.timeOut,
 							TimeUnit.MILLISECONDS);
 					if (csmtemp == null) {
@@ -214,20 +217,23 @@ public class Server implements Runnable {
 							// share
 							if (stkm.verifyDecryptedShare(frra.getCipher()
 									.toByteArray(), frra.getDecryptedShare())) {
+								SecretShare key = new SecretShare(
+										frra.getTimeStamp(), frra.getCipher());
 								Set<ForwardReadRequestAccept> tempevidenceSet = evidenceMap
-										.get(frra.getCipher());
+										.get(key);
 								if (tempevidenceSet == null) {
 									tempevidenceSet = new HashSet<ForwardReadRequestAccept>();
-									evidenceMap.put(frra.getCipher(),
-											tempevidenceSet);
+									evidenceMap.put(key, tempevidenceSet);
 								}
 
 								tempevidenceSet.add(frra);
-								if (tempevidenceSet.size() == quorumSize) {
-									evidenceSet = tempevidenceSet;
-									correctCipher = frra.getCipher();
-									break;
-								}
+								// if (tempevidenceSet.size() == t+1) {
+								// evidenceSet = tempevidenceSet;
+								// correctCipher = frra.getCipher();
+								// break;
+								// }
+
+								messagesReceived++;
 
 							}
 						}
@@ -239,10 +245,32 @@ public class Server implements Runnable {
 
 			}
 
+			// There might be multiple sets with t+1 entries
+			// This might happen because the compromised servers might team up
+			// with servers with old state to send the old timestamp
+			// To break the tie, select the set with higher TimeStamp
+			Set<ForwardReadRequestAccept> evidenceSet = null;
+			BigInteger correctCipher = null;
+			BigInteger correctTimeStamp = null;
+			for (SecretShare key : evidenceMap.keySet()) {
+				Set<ForwardReadRequestAccept> frraSet = evidenceMap.get(key);
+				if (frraSet.size() >= t + 1) {
+					if (evidenceSet == null
+							|| (correctTimeStamp != null && key.getTimestamp()
+									.compareTo(correctTimeStamp) == 1)) {
+						evidenceSet = frraSet;
+						correctCipher = key.getSecret();
+						correctTimeStamp = key.getTimestamp();
+					}
+				}
+			}
+
 			if (evidenceSet == null) {
 				// Handle this later
 				System.out.println("Evidence set null");
 			} else {
+				println("MAJORITY : Got " + evidenceSet.size()
+						+ " messages with timestamp " + correctTimeStamp);
 				// REceived t+1 pieces of evidence
 
 				// Get t+1 sigshares to decrypt cipher
@@ -371,14 +399,115 @@ public class Server implements Runnable {
 					.deserialize(cm.getSerializedMessage());
 			// println(crr.getEncryptedBlindingFactor().toString());
 
+			// Request a timestamp from a quorum of servers
+			TimeStampRequest tsr = new TimeStampRequest(cm);
+
+			CODEXServerMessage csm_tsr = new CODEXServerMessage(
+					new Random().nextLong(), getServerId(),
+					CODEXServerMessageType.TIMESTAMP_REQUEST,
+					SerializationUtil.serialize(tsr));
+
+			println("Sending " + csm_tsr.getType() + " message to " + l
+					+ " servers");
+
+			sendMessageToAllServers(csm_tsr);
+
+			// Now wait for responses of type TIMESTAMP_RESPONSE from a quorum
+			// of servers
+			// Now wait for a quorum number of messages
+			HashMap<BigInteger, Set<TimeStampResponse>> evidenceMap = new HashMap<BigInteger, Set<TimeStampResponse>>();
+			tu.reset();
+			int messagesReceived = 0;
+			while (tu.timerHasNotExpired()) {
+				CODEXServerMessage csmtemp;
+				try {
+					if (messagesReceived == quorumSize)
+						break;
+					csmtemp = serverMessages.poll(TimeUtility.timeOut,
+							TimeUnit.MILLISECONDS);
+					if (csmtemp == null) {
+						println("No message received. Timing out");
+						break;
+					}
+					if (csmtemp.getType().equals(
+							CODEXServerMessageType.TIMESTAMP_RESPONSE) && isNonceEqual(csm_tsr, csmtemp)) {
+						TimeStampResponse tsres = (TimeStampResponse) SerializationUtil
+								.deserialize(csmtemp.getSerializedMessage());
+						
+						
+						// Create string with TIMESTAMP_RESPONSE
+						// Timestamp and MW(n)
+						String str = CODEXServerMessageType.TIMESTAMP_RESPONSE
+								+ tsres.getTimeStamp().toString()
+								+ (new BigInteger(SerializationUtil.serialize(cm))
+										.toString());
+						// Now check the signature of MR(n)
+						if (skm.verifyServerSignature(SerializationUtil
+								.serialize(str), tsres.getDigitalSig()
+								.toByteArray(), csmtemp.getSenderId())) {
+
+							
+								
+								Set<TimeStampResponse> tempevidenceSet = evidenceMap
+										.get(tsres.getTimeStamp());
+								if (tempevidenceSet == null) {
+									tempevidenceSet = new HashSet<TimeStampResponse>();
+									evidenceMap.put(tsres.getTimeStamp(), tempevidenceSet);
+								}
+
+								tempevidenceSet.add(tsres);
+								// if (tempevidenceSet.size() == t+1) {
+								// evidenceSet = tempevidenceSet;
+								// correctCipher = frra.getCipher();
+								// break;
+								// }
+
+								messagesReceived++;
+
+							}
+						
+					}
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+
+			}
+
+			// There might be multiple sets with t+1 entries
+			// This might happen because the compromised servers might team up
+			// with servers with old state to send the old timestamp
+			// To break the tie, select the set with higher TimeStamp
+			Set<TimeStampResponse> evidenceSetTS = null;
+			BigInteger correctTimeStamp = null;
+			for (BigInteger key : evidenceMap.keySet()) {
+				Set<TimeStampResponse> tsSet = evidenceMap.get(key);
+				if (tsSet.size() >= t + 1) {
+					if (evidenceSetTS == null
+							|| (correctTimeStamp != null && key
+									.compareTo(correctTimeStamp) == 1)) {
+						evidenceSetTS = tsSet;
+						correctTimeStamp = key;
+					}
+				}
+			}
+			
+			if(evidenceSetTS == null){
+				//Handle this later
+				//No timestamp found
+				println("EvidenceSet for TimestampResponse is null");
+			}
+			
+			ForwardWriteRequest fwr = new ForwardWriteRequest(cm, correctTimeStamp.add(BigInteger.ONE), evidenceSetTS);
+
 			CODEXServerMessage csm = new CODEXServerMessage(
 					new Random().nextLong(), getServerId(),
 					CODEXServerMessageType.FORWARD_WRITE_REQUEST,
-					SerializationUtil.serialize(cm));
+					SerializationUtil.serialize(fwr));
 
-			println("Forwarding " + cm.getType() + " message to " + l
+			println("Forwarding " + csm.getType() + " message to " + l
 					+ " servers");
-			
+
 			// Send messages to all servers
 			sendMessageToAllServers(csm);
 
@@ -401,13 +530,20 @@ public class Server implements Runnable {
 
 					if (csmtemp
 							.getType()
-							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT)) {
+							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT) && isNonceEqual(csm, csmtemp)) {
 						ForwardWriteRequestAccept frrw = (ForwardWriteRequestAccept) SerializationUtil
 								.deserialize(csmtemp.getSerializedMessage());
 
+						// Create string with FORWARD_WRITE_REQUEST_ACCEPT
+						// Timestamp and MW(n)
+						String str = CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT
+								+ fwr.getTimestamp().toString()
+								+ (new BigInteger(SerializationUtil.serialize(cm))
+										.toString());
+						
 						// Now check the signature of MW(n)
 						if (skm.verifyServerSignature(SerializationUtil
-								.serialize(cm), frrw.getDigitalSig()
+								.serialize(str), frrw.getDigitalSig()
 								.toByteArray(), csmtemp.getSenderId())) {
 
 							evidenceSet.add(frrw);
@@ -435,17 +571,17 @@ public class Server implements Runnable {
 
 				// Create the VERIFY message to be sent to other servers
 				VerifyWriteRequest vrw = new VerifyWriteRequest(crw, wsr,
-						evidenceSet);
+						evidenceSet, fwr.getTimestamp());
 
 				CODEXServerMessage csm_verify = new CODEXServerMessage(
 						new Random().nextLong(), getServerId(),
 						CODEXServerMessageType.VERIFY_WRITE_REQUEST,
 						SerializationUtil.serialize(vrw));
 
-				println("Sending " + csm_verify.getType() + " message to "
-						+ l + " servers");
+				println("Sending " + csm_verify.getType() + " message to " + l
+						+ " servers");
 
-				// Send messages to all servers 
+				// Send messages to all servers
 				sendMessageToAllServers(csm_verify);
 
 				tu.reset();
@@ -526,7 +662,9 @@ public class Server implements Runnable {
 
 							if (csmtemp
 									.getType()
-									.equals(CODEXServerMessageType.SIGNED_WRITE_RESPONSE)) {
+									.equals(CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
+									&& csmtemp.getNonce() == csm_swrr
+											.getNonce()) {
 								SignedWriteResponse swr = (SignedWriteResponse) SerializationUtil
 										.deserialize(csmtemp
 												.getSerializedMessage());
@@ -597,8 +735,10 @@ public class Server implements Runnable {
 
 	private void println(String string) {
 		long temptimer = System.currentTimeMillis();
-		//System.out.println("<"+dateFormatter.format(new Date())+">"+"Server " + this.getServerId() + " : " + string);
-		System.out.println("<"+(temptimer-timer)+">"+"Server " + this.getServerId() + " : " + string);
+		// System.out.println("<"+dateFormatter.format(new Date())+">"+"Server "
+		// + this.getServerId() + " : " + string);
+		System.out.println("<" + (temptimer - timer) + ">" + "Server "
+				+ this.getServerId() + " : " + string);
 		timer = temptimer;
 
 	}
@@ -620,13 +760,13 @@ public class Server implements Runnable {
 	//
 	// }
 
-//	public boolean isMessageCount(String key, int count) {
-//		if (messageCache.containsKey(key)) {
-//			if (messageCache.get(key).size() >= count)
-//				return true;
-//		}
-//		return false;
-//	}
+	// public boolean isMessageCount(String key, int count) {
+	// if (messageCache.containsKey(key)) {
+	// if (messageCache.get(key).size() >= count)
+	// return true;
+	// }
+	// return false;
+	// }
 
 	public void sendMessageToAllServers(CODEXServerMessage csm) {
 		// Clear the server messages queue
@@ -636,20 +776,20 @@ public class Server implements Runnable {
 			return;
 		}
 
-//		Random r = new Random();
-//		Set<Integer> serversToSend = new HashSet<Integer>();
-//		while (serversToSend.size() != l) {
-//			serversToSend.add(r.nextInt(l));
-//		}
-//
-//		for (Integer in : serversToSend) {
-//			sendMessage(csm, in);
-//		}
-		
-		for(int i = 0; i<l ; i++){
+		// Random r = new Random();
+		// Set<Integer> serversToSend = new HashSet<Integer>();
+		// while (serversToSend.size() != l) {
+		// serversToSend.add(r.nextInt(l));
+		// }
+		//
+		// for (Integer in : serversToSend) {
+		// sendMessage(csm, in);
+		// }
+
+		for (int i = 0; i < l; i++) {
 			sendMessage(csm, i);
 		}
-		//return serversToSend;
+		// return serversToSend;
 	}
 
 	public void sendMessage(CODEXServerMessage csm, int serverId) {
@@ -709,7 +849,6 @@ public class Server implements Runnable {
 	}
 
 	private class ServerSocketListener implements Runnable {
-
 
 		@Override
 		public void run() {
@@ -815,7 +954,7 @@ public class Server implements Runnable {
 					// back
 					ForwardReadRequestAccept frra = new ForwardReadRequestAccept(
 							new BigInteger(skm.getSignature(ccm)), cipher,
-							decryptedShare);
+							decryptedShare, ss.getTimestamp());
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(), getServerId(),
@@ -856,6 +995,8 @@ public class Server implements Runnable {
 					CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)
 					|| sm.getType()
 							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT)
+					|| sm.getType()
+							.equals(CODEXServerMessageType.TIMESTAMP_RESPONSE)
 					|| sm.getType().equals(
 							CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
 					|| sm.getType().equals(
@@ -942,9 +1083,66 @@ public class Server implements Runnable {
 				// println("Message Set size : " + messageSet.size());
 
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.FORWARD_WRITE_REQUEST)) {
-				CODEXClientMessage ccm = (CODEXClientMessage) SerializationUtil
+					CODEXServerMessageType.TIMESTAMP_REQUEST)) {
+
+				TimeStampRequest tsr = (TimeStampRequest) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
+				CODEXClientMessage ccm = tsr.getCcm();
+
+				// Verify client message
+				if (!skm.verifyClientSignature(ccm)) {
+					// Send a FORWARD_WRITE_REQUEST_REJECT
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(), getServerId(),
+							CODEXServerMessageType.TIMESTAMP_REQUEST_REJECT,
+							SerializationUtil.serialize(ccm));
+
+					sendMessage(csm, sm.getSenderId());
+				} else {
+					// Client Message is correct
+					ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
+							.deserialize(ccm.getSerializedMessage());
+
+					BigInteger timestamp = null;
+
+					// Check if some value is locally bound to N
+					SecretShare ss = shareDB.get(crw.getDataId());
+
+					// If no value is bound, then send back a one timestamp
+					if (ss == null)
+						timestamp = BigInteger.ONE;
+					else {
+						timestamp = ss.getTimestamp();
+					}
+
+					// Create string with TIMESTAMP_RESPONSE
+					// Timestamp and MW(n)
+					String str = CODEXServerMessageType.TIMESTAMP_RESPONSE
+							+ timestamp.toString()
+							+ (new BigInteger(SerializationUtil.serialize(ccm))
+									.toString());
+
+					// Create the FORWARD_WRITE_REQUEST_ACCEPT message to send
+					// back
+					TimeStampResponse tsres = new TimeStampResponse(
+							new BigInteger(skm.getSignature(str)), timestamp);
+
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(), getServerId(),
+							CODEXServerMessageType.TIMESTAMP_RESPONSE,
+							SerializationUtil.serialize(tsres));
+
+					sendMessage(csm, sm.getSenderId());
+				}
+
+			} else if (sm.getType().equals(
+					CODEXServerMessageType.FORWARD_WRITE_REQUEST)) {
+				
+				
+				ForwardWriteRequest fwr = (ForwardWriteRequest) SerializationUtil
+						.deserialize(sm.getSerializedMessage());
+				
+				CODEXClientMessage ccm  = fwr.getCwr();
 
 				// Verify client message
 				if (!skm.verifyClientSignature(ccm)) {
@@ -957,16 +1155,29 @@ public class Server implements Runnable {
 
 					sendMessage(csm, sm.getSenderId());
 				} else {
+					//Verify the evidence Set 
+					//Do this later
+					
 					// Client Message is correct
 					ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
 							.deserialize(ccm.getSerializedMessage());
 
 					// ?? Locally bind E(s) to name N ??
-
+					println("Updating dataId "+crw.getDataId()+" with timestamp "+fwr.getTimestamp() +" and secret "+crw.getEncryptedSecret());
+					shareDB.put(crw.getDataId(), new SecretShare(fwr.getTimestamp(), crw.getEncryptedSecret()));
+					
+					// Create string with FORWARD_WRITE_REQUEST_ACCEPT
+					// Timestamp and MW(n)
+					String str = CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT
+							+ fwr.getTimestamp().toString()
+							+ (new BigInteger(SerializationUtil.serialize(ccm))
+									.toString());
+					
+					
 					// Create the FORWARD_WRITE_REQUEST_ACCEPT message to send
 					// back
 					ForwardWriteRequestAccept frrw = new ForwardWriteRequestAccept(
-							new BigInteger(skm.getSignature(ccm)));
+							new BigInteger(skm.getSignature(str)));
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(),
@@ -1001,16 +1212,18 @@ public class Server implements Runnable {
 
 					// ?? Verify signature of MW(n) here ??
 					BigInteger ts = null;
-					if (shareDB.containsKey(cwr.getDataId())) {
-						ts = shareDB.get(cwr.getDataId()).getTimestamp();
-					} else {
-						ts = BigInteger.ZERO;
-					}
+//					if (shareDB.containsKey(cwr.getDataId())) {
+//						ts = shareDB.get(cwr.getDataId()).getTimestamp();
+//					} else {
+//						ts = BigInteger.ZERO;
+//					}
 
 					// Update db here
+					println("Updating dataId "+cwr.getDataId()+" with timestamp "+vwr.getTimestamp() +" and secret "+cwr.getEncryptedSecret());
+
 					shareDB.put(
 							cwr.getDataId(),
-							new SecretShare(ts.add(BigInteger.ONE), cwr
+							new SecretShare(vwr.getTimestamp(), cwr
 									.getEncryptedSecret()));
 
 					// Send VERIFIED message back to sender Server
@@ -1085,4 +1298,11 @@ public class Server implements Runnable {
 		printState();
 	}
 
+	public boolean isNonceEqual(CODEXServerMessage csm1, CODEXServerMessage csm2 ){
+		if(csm1 == null)
+			return false;
+		if(csm2 == null)
+			return false;
+		return csm1.getNonce() == csm2.getNonce();
+	}
 }

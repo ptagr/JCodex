@@ -878,7 +878,7 @@ public class CopyOfServer implements Runnable {
 					// back
 					ForwardReadRequestAccept frra = new ForwardReadRequestAccept(
 							new BigInteger(skm.getSignature(ccm)), cipher,
-							decryptedShare);
+							decryptedShare, ss.getTimestamp());
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(), getServerId(),

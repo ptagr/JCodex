@@ -109,7 +109,7 @@ public class ClientStubTest {
 				
 				//cs.getSecret("test");
 				cs.setSecret("test3", "helloworld4");
-				cs.getSecret("test3");
+				cs.getSecret("test");
 				//while(!cs.setSecret("test3", "helloworld4") && tries++ < MAX_TRIES);
 				
 				tries = 0;

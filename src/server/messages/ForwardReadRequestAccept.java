@@ -17,13 +17,16 @@ public class ForwardReadRequestAccept implements Serializable{
 	private BigInteger cipher;
 	
 	private SigShare decryptedShare;
+	
+	private BigInteger timeStamp;
 
 	public ForwardReadRequestAccept(BigInteger digitalSig, BigInteger cipher,
-			SigShare decryptedShare) {
+			SigShare decryptedShare, BigInteger timestamp) {
 		super();
 		this.setDigitalSig(digitalSig);
 		this.setCipher(cipher);
 		this.setDecryptedShare(decryptedShare);
+		this.setTimeStamp(timestamp);
 	}
 
 	public BigInteger getDigitalSig() {
@@ -48,6 +51,14 @@ public class ForwardReadRequestAccept implements Serializable{
 
 	public void setDecryptedShare(SigShare decryptedShare) {
 		this.decryptedShare = decryptedShare;
+	}
+
+	public BigInteger getTimeStamp() {
+		return timeStamp;
+	}
+
+	public void setTimeStamp(BigInteger timeStamp) {
+		this.timeStamp = timeStamp;
 	}
 	
 	
