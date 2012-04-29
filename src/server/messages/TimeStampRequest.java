@@ -1,11 +1,12 @@
 package server.messages;
 
 import java.io.Serializable;
+import java.math.BigInteger;
 
 import client.messages.CODEXClientMessage;
-import client.messages.ClientWriteRequest;
+import client.messages.ClientUpdateRequest;
 
-public class TimeStampRequest implements Serializable{
+public class TimeStampRequest extends InternalServerMessage implements Serializable{
 
 	/**
 	 * 
@@ -19,6 +20,15 @@ public class TimeStampRequest implements Serializable{
 		this.ccm = ccm;
 	}
 
+	
+	
+	public TimeStampRequest(CODEXClientMessage ccm, int destId) {
+		super(destId);
+		this.ccm = ccm;
+	}
+
+
+
 	public CODEXClientMessage getCcm() {
 		return ccm;
 	}
@@ -26,5 +36,9 @@ public class TimeStampRequest implements Serializable{
 	public void setCwr(CODEXClientMessage ccm) {
 		this.ccm = ccm;
 	}
+
+	
+
+	
 
 }

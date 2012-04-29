@@ -7,6 +7,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -16,33 +17,38 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import main.ConnectionInfo;
-import main.Constants;
 import server.messages.BlindedReadResponse;
 import server.messages.CODEXServerMessage;
 import server.messages.CODEXServerMessageType;
 import server.messages.ForwardReadRequestAccept;
-import server.messages.ForwardWriteRequest;
-import server.messages.ForwardWriteRequestAccept;
+import server.messages.InternalServerMessage;
 import server.messages.SignReadResponseRequest;
-import server.messages.SignWriteResponseRequest;
+import server.messages.SignTimeStampResponseRequest;
+import server.messages.SignUpdateRejectReponse;
+import server.messages.SignUpdateAcceptResponse;
 import server.messages.SignedReadResponse;
-import server.messages.SignedWriteResponse;
+import server.messages.SignedTimeStampResponse;
+import server.messages.SignedUpdateRejectResponse;
+import server.messages.SignedUpdateAcceptResponse;
+import server.messages.TimeStampReadResponse;
 import server.messages.TimeStampRequest;
 import server.messages.TimeStampResponse;
-import server.messages.VerifiedWriteRequest;
-import server.messages.VerifyWriteRequest;
-import server.messages.WriteSecretResponse;
+import server.messages.UpdateAcceptResponse;
+import server.messages.UpdateRejectResponse;
+import server.messages.UpdateRequest;
+import server.messages.ClientUpdateRejectResponse;
+import server.messages.ClientUpdateAcceptResponse;
 import threshsig.SigShare;
 import utils.SerializationUtil;
 import utils.TimeUtility;
 import client.messages.CODEXClientMessage;
 import client.messages.CODEXClientMessageType;
 import client.messages.ClientReadRequest;
-import client.messages.ClientWriteRequest;
+import client.messages.ClientTimeStampRequest;
+import client.messages.ClientUpdateRequest;
 
 public class Server implements Runnable {
 	private int l;
-	private int k;
 	private int t;
 
 	int quorumSize;
@@ -87,9 +93,12 @@ public class Server implements Runnable {
 	LinkedBlockingQueue<CODEXServerMessage> serverMessages = new LinkedBlockingQueue<CODEXServerMessage>(
 			10);
 
+	LinkedBlockingQueue<CODEXClientMessage> clientMessages = new LinkedBlockingQueue<CODEXClientMessage>();
+
+	LinkedBlockingQueue<Long> clientMessagesProcessed = new LinkedBlockingQueue<Long>();
+
 	public Server(int k, int l, int clientPort, int serverId,
 			Set<Integer> clientIds) {
-		this.k = k;
 		this.t = k - 1;
 		this.l = l;
 
@@ -109,6 +118,7 @@ public class Server implements Runnable {
 		try {
 			this.clientConnectionSocket = new DatagramSocket(clientPort
 					+ serverId);
+			this.clientConnectionSocket.setSoTimeout(1000);
 			// this.serverSocket.setSoTimeout(TimeUtility.timeOut);
 		} catch (SocketException e) {
 
@@ -135,29 +145,49 @@ public class Server implements Runnable {
 		// TODO Auto-generated method stub
 		byte[] receiveData = new byte[8192];
 		TimeUtility tu = new TimeUtility();
+		println("Waiting for client messages on socket : "
+				+ clientConnectionSocket.getLocalPort());
 		while (true) {
 			DatagramPacket receivePacket = new DatagramPacket(receiveData,
 					receiveData.length);
 			try {
-				println("Waiting for client messages on socket : "
-						+ clientConnectionSocket.getLocalPort());
-				this.clientConnectionSocket.receive(receivePacket);
-				tu.reset();
-				handlePacket(receivePacket);
-				System.out.println("Handled packet in " + tu.delta() + " ms");
+
+				if (clientMessages.peek() != null) {
+					CODEXClientMessage ccm = clientMessages.poll();
+					println("Handling client message from queue sent by client "
+							+ ccm.getSenderId()
+							+ " with nonce "
+							+ ccm.getNonce());
+					handleClientMessage(ccm);
+				} else {
+					
+					this.clientConnectionSocket.receive(receivePacket);
+					tu.reset();
+					handlePacket(receivePacket);
+					System.out.println("Handled packet in " + tu.delta()
+							+ " ms");
+				}
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
-				e.printStackTrace();
+				if(!(e instanceof SocketTimeoutException))
+					e.printStackTrace();
 			}
 		}
 
 	}
 
 	private void handlePacket(DatagramPacket receivePacket) {
-
-		// System.out.println("Received a client request");
 		CODEXClientMessage cm = (CODEXClientMessage) SerializationUtil
 				.deserialize(receivePacket.getData());
+		cm.setAddress(receivePacket.getAddress());
+		cm.setPort(receivePacket.getPort());
+		handleClientMessage(cm);
+	}
+
+	private void handleClientMessage(CODEXClientMessage cm) {
+
+		// System.out.println("Received a client request");
+
 		TimeUtility tu = new TimeUtility();
 		println("Received " + cm.getType() + " from client " + cm.getSenderId()
 				+ " with nonce " + cm.getNonce());
@@ -167,19 +197,215 @@ public class Server implements Runnable {
 			println("Cannot verify signature");
 			return;
 		}
+		if (cm.getType()
+				.equals(CODEXClientMessageType.CLIENT_TIMESTAMP_REQUEST)) {
 
-		if (cm.getType().equals(
-				CODEXClientMessageType.CLIENT_READ_SECRET_REQUEST)) {
+			ClientTimeStampRequest ctr = (ClientTimeStampRequest) SerializationUtil
+					.deserialize(cm.getSerializedMessage());
+
+			// Request a timestamp from a quorum of servers
+			TimeStampRequest tsr = new TimeStampRequest(cm);
+
+			// CODEXServerMessage csm_tsr = new CODEXServerMessage(
+			// new Random().nextLong(), getServerId(),
+			// CODEXServerMessageType.FORWARD_TIMESTAMP_REQUEST,
+			// SerializationUtil.serialize(tsr));
+
+			long nonce_ftr = sendMessageToAllServers(tsr,
+					CODEXServerMessageType.TIMESTAMP_REQUEST);
+
+			// Now wait for responses of type FORWARD_TIMESTAMP_RESPONSE from a
+			// quorum
+			// of servers
+			// Now wait for a quorum number of messages
+			HashMap<BigInteger, Set<CODEXServerMessage>> evidenceMap = new HashMap<BigInteger, Set<CODEXServerMessage>>();
+			// /Set<CODEXServerMessage> rejectSet = new
+			// HashSet<CODEXServerMessage>();
+			tu.reset();
+			int messagesReceived = 0;
+			while (tu.timerHasNotExpired()) {
+				CODEXServerMessage csmtemp;
+				try {
+					if (messagesReceived == quorumSize)
+						break;
+					csmtemp = serverMessages.poll(TimeUtility.timeOut,
+							TimeUnit.MILLISECONDS);
+					if (csmtemp == null) {
+						println("No message received. Timing out");
+						break;
+					}
+					if (nonce_ftr == csmtemp.getNonce()) {
+						if (csmtemp.getType().equals(
+								CODEXServerMessageType.TIMESTAMP_RESPONSE)) {
+
+							TimeStampResponse tsres = (TimeStampResponse) SerializationUtil
+									.deserialize(csmtemp.getSerializedMessage());
+
+							// Check whether tsres.getCcm() == cm
+							// Later
+
+							Set<CODEXServerMessage> tempevidenceSet = evidenceMap
+									.get(tsres.getTimeStamp());
+							if (tempevidenceSet == null) {
+								tempevidenceSet = new HashSet<CODEXServerMessage>();
+								evidenceMap.put(tsres.getTimeStamp(),
+										tempevidenceSet);
+							}
+
+							tempevidenceSet.add(csmtemp);
+
+							messagesReceived++;
+
+						}
+
+					}
+
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+
+			}
+
+			// There might be multiple sets with t+1 entries
+			// This might happen because the compromised servers might team
+			// up
+			// with servers with old state to send the old timestamp
+			// To break the tie, select the set with higher TimeStamp
+			Set<CODEXServerMessage> evidenceSetTS = null;
+			BigInteger correctTimeStamp = null;
+			for (BigInteger key : evidenceMap.keySet()) {
+				Set<CODEXServerMessage> tsSet = evidenceMap.get(key);
+				if (tsSet.size() >= t + 1) {
+					if (evidenceSetTS == null
+							|| (correctTimeStamp != null && key
+									.compareTo(correctTimeStamp) == 1)) {
+						evidenceSetTS = tsSet;
+						correctTimeStamp = key;
+					}
+				}
+			}
+
+			if (evidenceSetTS == null) {
+				// Handle this later
+				// No timestamp found
+				println("EvidenceSet for TimestampResponse is null");
+				println("I should be compromised");
+			}
+
+			println("MAJORITY : Got " + evidenceSetTS.size()
+					+ " messages with timestamp " + correctTimeStamp);
+			// REceived t+1 pieces of evidence
+
+			TimeStampReadResponse trr = new TimeStampReadResponse(cm,
+					correctTimeStamp, ctr.getDataId());
+
+			// Create the sign request
+			SignTimeStampResponseRequest strr = new SignTimeStampResponseRequest(
+					evidenceSetTS, trr);
+
+			// CODEXServerMessage csm2 = new CODEXServerMessage(
+			// new Random().nextLong(), getServerId(),
+			// CODEXServerMessageType.SIGN_TIMESTAMP_ACCEPT_RESPONSE,
+			// SerializationUtil.serialize(strr));
+
+			// Invoke a threshold signature protocol with all servers
+			// to sign the response message
+			// sendMessageToAllServers(csm2);
+			long nonce_strr = sendMessageToAllServers(strr,
+					CODEXServerMessageType.SIGN_TIMESTAMP_ACCEPT_RESPONSE);
+
+			BigInteger digitalSigRes = null;
+			Set<SigShare> sigs = new HashSet<SigShare>();
+			byte[] trrBytes = SerializationUtil.serialize(trr);
+			tu.reset();
+			while (tu.timerHasNotExpired()) {
+				CODEXServerMessage csmtemp;
+				try {
+					csmtemp = serverMessages.poll(TimeUtility.timeOut,
+							TimeUnit.MILLISECONDS);
+
+					if (csmtemp == null) {
+						println("No message received. Timing out");
+						break;
+					}
+					if (nonce_strr == csmtemp.getNonce()) {
+						if (csmtemp
+								.getType()
+								.equals(CODEXServerMessageType.SIGNED_TIMESTAMP_ACCEPT_RESPONSE)) {
+							SignedTimeStampResponse str = (SignedTimeStampResponse) SerializationUtil
+									.deserialize(csmtemp.getSerializedMessage());
+
+							// Verify the signature on blinded response
+							if (stkm.verifySignedShare(trrBytes,
+									str.getSignedShare())) {
+								sigs.add(str.getSignedShare());
+								if (sigs.size() >= (t + 1)) {
+									println("Got t+1 signatures : "
+											+ sigs.size());
+									// Try generating the threshold
+									// signature
+									// Use the partial signatures to create
+									// the
+									// signed
+									// response for the client
+									digitalSigRes = stkm.thresholdSign(
+											trrBytes, sigs);
+									if (digitalSigRes == null) {
+										// Signature could not be generated
+										// So continue the loop and try one
+										// more
+										// signature
+									} else {
+										break;
+									}
+
+								}
+
+							} else {
+								println("Cannot verify timestamp response");
+							}
+
+						}
+					}
+
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+
+			}
+
+			if (digitalSigRes == null) {
+				// Could not generate threshold signature
+				// Handle this later
+				error("Could not generate a valid threshold signature");
+			} else {
+
+				CODEXClientMessage clientRes = new CODEXClientMessage(
+						cm.getNonce(), getServerId(),
+						CODEXClientMessageType.TIMESTAMP_RESPONSE, trrBytes);
+				clientRes.setSerializedMessageSignature(digitalSigRes
+						.toByteArray());
+
+				// Send back response
+				println("Send back client reponse on host " + cm.getAddress()
+						+ " and port " + cm.getPort());
+				sendResponseMessage(clientRes, cm.getAddress(), cm.getPort());
+			}
+
+		} else if (cm.getType().equals(
+				CODEXClientMessageType.CLIENT_READ_REQUEST)) {
 			ClientReadRequest crr = (ClientReadRequest) SerializationUtil
 					.deserialize(cm.getSerializedMessage());
 			// println(crr.getEncryptedBlindingFactor().toString());
 
 			CODEXServerMessage csm = new CODEXServerMessage(
 					new Random().nextLong(), getServerId(),
-					CODEXServerMessageType.FORWARD_READ_REQUEST,
+					CODEXServerMessageType.READ_REQUEST,
 					SerializationUtil.serialize(cm));
 
-			println("Forwarding CLIENT_READ_SECRET_REQUEST message to " + l
+			println("Forwarding CLIENT_READ_REQUEST message to " + l
 					+ " servers");
 
 			// Make an entry in serverCheckCache of <nonce, MR(n)>
@@ -204,7 +430,7 @@ public class Server implements Runnable {
 						break;
 					}
 					if (csmtemp.getType().equals(
-							CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)) {
+							CODEXServerMessageType.READ_ACCEPT_RESPONSE)) {
 						ForwardReadRequestAccept frra = (ForwardReadRequestAccept) SerializationUtil
 								.deserialize(csmtemp.getSerializedMessage());
 
@@ -297,7 +523,7 @@ public class Server implements Runnable {
 
 				CODEXServerMessage csm2 = new CODEXServerMessage(
 						new Random().nextLong(), getServerId(),
-						CODEXServerMessageType.SIGN_READ_RESPONSE_REQUEST,
+						CODEXServerMessageType.SIGN_READ_ACCEPT_RESPONSE,
 						SerializationUtil.serialize(srrr));
 
 				// Invoke a threshold signature protocol with all servers
@@ -319,8 +545,10 @@ public class Server implements Runnable {
 							break;
 						}
 
-						if (csmtemp.getType().equals(
-								CODEXServerMessageType.SIGNED_READ_RESPONSE)) {
+						if (csmtemp
+								.getType()
+								.equals(CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE)
+								&& isNonceEqual(csm2, csmtemp)) {
 							SignedReadResponse srr = (SignedReadResponse) SerializationUtil
 									.deserialize(csmtemp.getSerializedMessage());
 
@@ -383,139 +611,51 @@ public class Server implements Runnable {
 
 					// Send back response
 					println("Send back client reponse on host "
-							+ receivePacket.getAddress() + " and port "
-							+ receivePacket.getPort());
-					sendResponseMessage(clientRes, receivePacket.getAddress(),
-							receivePacket.getPort());
+							+ cm.getAddress() + " and port " + cm.getPort());
+					sendResponseMessage(clientRes, cm.getAddress(),
+							cm.getPort());
 				}
 
 			}
 
 		} else if (cm.getType().equals(
-				CODEXClientMessageType.CLIENT_WRITE_SECRET_REQUEST)) {
+				CODEXClientMessageType.CLIENT_UPDATE_REQUEST)) {
 
+			//Add the request to receivedMEssage history
+			clientMessagesProcessed.add(cm.getNonce());
+			
 			// Write Protocol starts here
-			ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
+			ClientUpdateRequest crw = (ClientUpdateRequest) SerializationUtil
 					.deserialize(cm.getSerializedMessage());
 			// println(crr.getEncryptedBlindingFactor().toString());
 
-			// Request a timestamp from a quorum of servers
-			TimeStampRequest tsr = new TimeStampRequest(cm);
-
-			CODEXServerMessage csm_tsr = new CODEXServerMessage(
-					new Random().nextLong(), getServerId(),
-					CODEXServerMessageType.TIMESTAMP_REQUEST,
-					SerializationUtil.serialize(tsr));
-
-			println("Sending " + csm_tsr.getType() + " message to " + l
-					+ " servers");
-
-			sendMessageToAllServers(csm_tsr);
-
-			// Now wait for responses of type TIMESTAMP_RESPONSE from a quorum
-			// of servers
-			// Now wait for a quorum number of messages
-			HashMap<BigInteger, Set<TimeStampResponse>> evidenceMap = new HashMap<BigInteger, Set<TimeStampResponse>>();
-			tu.reset();
-			int messagesReceived = 0;
-			while (tu.timerHasNotExpired()) {
-				CODEXServerMessage csmtemp;
-				try {
-					if (messagesReceived == quorumSize)
-						break;
-					csmtemp = serverMessages.poll(TimeUtility.timeOut,
-							TimeUnit.MILLISECONDS);
-					if (csmtemp == null) {
-						println("No message received. Timing out");
-						break;
-					}
-					if (csmtemp.getType().equals(
-							CODEXServerMessageType.TIMESTAMP_RESPONSE) && isNonceEqual(csm_tsr, csmtemp)) {
-						TimeStampResponse tsres = (TimeStampResponse) SerializationUtil
-								.deserialize(csmtemp.getSerializedMessage());
-						
-						
-						// Create string with TIMESTAMP_RESPONSE
-						// Timestamp and MW(n)
-						String str = CODEXServerMessageType.TIMESTAMP_RESPONSE
-								+ tsres.getTimeStamp().toString()
-								+ (new BigInteger(SerializationUtil.serialize(cm))
-										.toString());
-						// Now check the signature of MR(n)
-						if (skm.verifyServerSignature(SerializationUtil
-								.serialize(str), tsres.getDigitalSig()
-								.toByteArray(), csmtemp.getSenderId())) {
-
-							
-								
-								Set<TimeStampResponse> tempevidenceSet = evidenceMap
-										.get(tsres.getTimeStamp());
-								if (tempevidenceSet == null) {
-									tempevidenceSet = new HashSet<TimeStampResponse>();
-									evidenceMap.put(tsres.getTimeStamp(), tempevidenceSet);
-								}
-
-								tempevidenceSet.add(tsres);
-								// if (tempevidenceSet.size() == t+1) {
-								// evidenceSet = tempevidenceSet;
-								// correctCipher = frra.getCipher();
-								// break;
-								// }
-
-								messagesReceived++;
-
-							}
-						
-					}
-				} catch (InterruptedException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
-
+			// First get the CODEXClientMessage from the write request and
+			// check its signature and other details
+			CODEXClientMessage ccm = crw.getCcm();
+			if (!ccm.getType()
+					.equals(CODEXClientMessageType.TIMESTAMP_RESPONSE)
+					|| !stkm.verifySignature(ccm)) {
+				// Then check failed
+				// Ignore the client request
+				println("CHECK for TIMESTAMP_RESPONSE FAILED");
+				return;
 			}
 
-			// There might be multiple sets with t+1 entries
-			// This might happen because the compromised servers might team up
-			// with servers with old state to send the old timestamp
-			// To break the tie, select the set with higher TimeStamp
-			Set<TimeStampResponse> evidenceSetTS = null;
-			BigInteger correctTimeStamp = null;
-			for (BigInteger key : evidenceMap.keySet()) {
-				Set<TimeStampResponse> tsSet = evidenceMap.get(key);
-				if (tsSet.size() >= t + 1) {
-					if (evidenceSetTS == null
-							|| (correctTimeStamp != null && key
-									.compareTo(correctTimeStamp) == 1)) {
-						evidenceSetTS = tsSet;
-						correctTimeStamp = key;
-					}
-				}
-			}
-			
-			if(evidenceSetTS == null){
-				//Handle this later
-				//No timestamp found
-				println("EvidenceSet for TimestampResponse is null");
-			}
-			
-			ForwardWriteRequest fwr = new ForwardWriteRequest(cm, correctTimeStamp.add(BigInteger.ONE), evidenceSetTS);
+			// TimeStampReadResponse trr = (TimeStampReadResponse)
+			// SerializationUtil.deserialize(ccm.getSerializedMessage());
+			// BigInteger correctTimeStamp = trr.getTimestamp();
 
-			CODEXServerMessage csm = new CODEXServerMessage(
-					new Random().nextLong(), getServerId(),
-					CODEXServerMessageType.FORWARD_WRITE_REQUEST,
-					SerializationUtil.serialize(fwr));
+			UpdateRequest ur = new UpdateRequest(cm);
 
-			println("Forwarding " + csm.getType() + " message to " + l
-					+ " servers");
-
-			// Send messages to all servers
-			sendMessageToAllServers(csm);
+			long nonce_ur = sendMessageToAllServers(ur,
+					CODEXServerMessageType.UPDATE_REQUEST);
 
 			// Set<CODEXServerMessage> csmSet =
 			// messageCache.get(csm.getNonce());
-			Set<ForwardWriteRequestAccept> evidenceSet = new HashSet<ForwardWriteRequestAccept>();
-
-			// Wait for valid accepts from a quorum of servers
+			Set<CODEXServerMessage> evidenceSet = new HashSet<CODEXServerMessage>();
+			Set<CODEXServerMessage> rejectSet = new HashSet<CODEXServerMessage>();
+			// Wait for valid update_accepts from a quorum of servers
+			// or update_rejects from (t+1) servers
 			// or a timeout to occur
 			while (tu.timerHasNotExpired()) {
 				CODEXServerMessage csmtemp;
@@ -527,68 +667,52 @@ public class Server implements Runnable {
 						println("No message received. Timing out");
 						break;
 					}
+					if (nonce_ur == csmtemp.getNonce()) {
+						if (csmtemp.getType().equals(
+								CODEXServerMessageType.UPDATE_ACCEPT_RESPONSE)) {
 
-					if (csmtemp
-							.getType()
-							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT) && isNonceEqual(csm, csmtemp)) {
-						ForwardWriteRequestAccept frrw = (ForwardWriteRequestAccept) SerializationUtil
-								.deserialize(csmtemp.getSerializedMessage());
-
-						// Create string with FORWARD_WRITE_REQUEST_ACCEPT
-						// Timestamp and MW(n)
-						String str = CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT
-								+ fwr.getTimestamp().toString()
-								+ (new BigInteger(SerializationUtil.serialize(cm))
-										.toString());
-						
-						// Now check the signature of MW(n)
-						if (skm.verifyServerSignature(SerializationUtil
-								.serialize(str), frrw.getDigitalSig()
-								.toByteArray(), csmtemp.getSenderId())) {
-
-							evidenceSet.add(frrw);
+							evidenceSet.add(csmtemp);
 							if (evidenceSet.size() == quorumSize) {
 								// Received 2t+1 pieces of evidence
 								break;
 							}
-						}
-					}
 
+						} else if (csmtemp.getType().equals(
+								CODEXServerMessageType.UPDATE_REJECT_RESPONSE)) {
+							rejectSet.add(csmtemp);
+							if (rejectSet.size() == (t + 1)) {
+								// Received t+1 pieces of reject
+								break;
+							}
+						}
+
+					}
 				} catch (InterruptedException ie) {
 					ie.printStackTrace();
 				}
 			}
 
-			if (evidenceSet.size() < quorumSize) {
-				// Received less than quorum pieces of evidence
-				// Handle this later
-			} else {
-				// Received a quorum pieces of evidence
+			if (rejectSet.size() == (t + 1)) {
+				// Received (t+1) Rejects
 
-				// Create the write reponse to be sent to client
-				WriteSecretResponse wsr = new WriteSecretResponse(crw,
-						crw.getDataId());
+				// Create the write reject reponse to be sent to client
+				ClientUpdateRejectResponse wrr = new ClientUpdateRejectResponse(
+						cm, crw.getDataId());
 
-				// Create the VERIFY message to be sent to other servers
-				VerifyWriteRequest vrw = new VerifyWriteRequest(crw, wsr,
-						evidenceSet, fwr.getTimestamp());
+				// Create the sign request
+				SignUpdateRejectReponse swrrr = new SignUpdateRejectReponse(
+						rejectSet, wrr);
 
-				CODEXServerMessage csm_verify = new CODEXServerMessage(
-						new Random().nextLong(), getServerId(),
-						CODEXServerMessageType.VERIFY_WRITE_REQUEST,
-						SerializationUtil.serialize(vrw));
+				// Invoke a threshold signature protocol with all servers
+				// to sign the response message
+				// sendMessageToAllServers(csm2);
+				long nonce_swrrr = sendMessageToAllServers(swrrr,
+						CODEXServerMessageType.SIGN_UPDATE_REJECT_RESPONSE);
 
-				println("Sending " + csm_verify.getType() + " message to " + l
-						+ " servers");
-
-				// Send messages to all servers
-				sendMessageToAllServers(csm_verify);
-
+				BigInteger digitalSigRes = null;
+				Set<SigShare> sigs = new HashSet<SigShare>();
+				byte[] wrrBytes = SerializationUtil.serialize(wrr);
 				tu.reset();
-
-				// Wait for valid verify from a quorum of servers
-				// or a timeout to occur
-				Set<VerifiedWriteRequest> verifiedEvidenceSet = new HashSet<VerifiedWriteRequest>();
 				while (tu.timerHasNotExpired()) {
 					CODEXServerMessage csmtemp;
 					try {
@@ -599,73 +723,109 @@ public class Server implements Runnable {
 							println("No message received. Timing out");
 							break;
 						}
+						if (nonce_swrrr == csmtemp.getNonce()) {
+							if (csmtemp
+									.getType()
+									.equals(CODEXServerMessageType.SIGNED_UPDATE_REJECT_RESPONSE)) {
+								SignedUpdateRejectResponse swrr = (SignedUpdateRejectResponse) SerializationUtil
+										.deserialize(csmtemp
+												.getSerializedMessage());
 
-						if (csmtemp.getType().equals(
-								CODEXServerMessageType.VERIFIED_WRITE_REQUEST)) {
-							VerifiedWriteRequest vdwr = (VerifiedWriteRequest) SerializationUtil
-									.deserialize(csmtemp.getSerializedMessage());
+								// Verify the signature on write response
+								if (stkm.verifySignedShare(wrrBytes,
+										swrr.getSignedShare())) {
+									sigs.add(swrr.getSignedShare());
+									if (sigs.size() >= (t + 1)) {
+										println("Got t+1 signatures : "
+												+ sigs.size());
+										// Try generating the threshold
+										// signature
+										// Use the partial signatures to create
+										// the
+										// signed
+										// response for the client
+										digitalSigRes = stkm.thresholdSign(
+												wrrBytes, sigs);
+										if (digitalSigRes == null) {
+											// Signature could not be generated
+											// So continue the loop and try one
+											// more
+											// signature
+										} else {
+											break;
+										}
 
-							// Now check the signature of MW(n)
-							if (skm.verifyServerSignature(SerializationUtil
-									.serialize(wsr), vdwr.getDigitalSig()
-									.toByteArray(), csmtemp.getSenderId())) {
+									}
 
-								verifiedEvidenceSet.add(vdwr);
-								if (verifiedEvidenceSet.size() == quorumSize) {
-									// Received quorum pieces of evidence
-									break;
+								} else {
+									println("Cannot verify timestamp response");
 								}
 
 							}
 						}
 
-					} catch (InterruptedException ie) {
-						ie.printStackTrace();
+					} catch (InterruptedException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
 					}
+
 				}
 
-				if (verifiedEvidenceSet.size() < quorumSize) {
-					// Received less than quorum pieces of evidence
+				if (digitalSigRes == null) {
+					// Could not generate threshold signature
 					// Handle this later
+					error("Could not generate a valid threshold signature");
 				} else {
 
-					// Create the sign request
-					SignWriteResponseRequest swrr = new SignWriteResponseRequest(
-							verifiedEvidenceSet, wsr);
+					CODEXClientMessage clientRes = new CODEXClientMessage(
+							cm.getNonce(), getServerId(),
+							CODEXClientMessageType.UPDATE_REJECT_RESPONSE,
+							wrrBytes);
+					clientRes.setSerializedMessageSignature(digitalSigRes
+							.toByteArray());
 
-					CODEXServerMessage csm_swrr = new CODEXServerMessage(
-							new Random().nextLong(), getServerId(),
-							CODEXServerMessageType.SIGN_WRITE_RESPONSE_REQUEST,
-							SerializationUtil.serialize(swrr));
+					// Send back response
+					println("Send back client reponse on host "
+							+ cm.getAddress() + " and port " + cm.getPort());
+					sendResponseMessage(clientRes, cm.getAddress(),
+							cm.getPort());
+				}
+			} else if (evidenceSet.size() >= quorumSize) {
+				// Received a quorum pieces of evidence
 
-					// Invoke a threshold signature protocol with all
-					// servers
-					// to sign the response message
-					sendMessageToAllServers(csm_swrr);
+				// Create the write reponse to be sent to client
+				ClientUpdateAcceptResponse wsr = new ClientUpdateAcceptResponse(
+						cm, crw.getDataId());
 
-					tu.reset();
-					Set<SigShare> sigs = new HashSet<SigShare>();
+				// Create the sign request
+				SignUpdateAcceptResponse swrr = new SignUpdateAcceptResponse(
+						evidenceSet, wsr);
 
-					byte[] wsrBytes = SerializationUtil.serialize(wsr);
+				// Invoke a threshold signature protocol with all servers
+				// to sign the response message
+				// sendMessageToAllServers(csm2);
+				long nonce_swrr = sendMessageToAllServers(swrr,
+						CODEXServerMessageType.SIGN_UPDATE_ACCEPT_RESPONSE);
 
-					BigInteger digitalSigRes = null;
-					while (tu.timerHasNotExpired()) {
-						CODEXServerMessage csmtemp;
-						try {
-							csmtemp = serverMessages.poll(TimeUtility.timeOut,
-									TimeUnit.MILLISECONDS);
+				BigInteger digitalSigRes = null;
+				Set<SigShare> sigs = new HashSet<SigShare>();
+				byte[] wsrBytes = SerializationUtil.serialize(wsr);
+				tu.reset();
+				while (tu.timerHasNotExpired()) {
+					CODEXServerMessage csmtemp;
+					try {
+						csmtemp = serverMessages.poll(TimeUtility.timeOut,
+								TimeUnit.MILLISECONDS);
 
-							if (csmtemp == null) {
-								println("No message received. Timing out");
-								break;
-							}
-
+						if (csmtemp == null) {
+							println("No message received. Timing out");
+							break;
+						}
+						if (nonce_swrr == csmtemp.getNonce()) {
 							if (csmtemp
 									.getType()
-									.equals(CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
-									&& csmtemp.getNonce() == csm_swrr
-											.getNonce()) {
-								SignedWriteResponse swr = (SignedWriteResponse) SerializationUtil
+									.equals(CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE)) {
+								SignedUpdateAcceptResponse swr = (SignedUpdateAcceptResponse) SerializationUtil
 										.deserialize(csmtemp
 												.getSerializedMessage());
 
@@ -694,43 +854,43 @@ public class Server implements Runnable {
 										}
 
 									}
+
 								} else {
-									println("Cannot verify Write Response");
+									println("Cannot verify timestamp response");
 								}
 
 							}
-
-						} catch (InterruptedException ie) {
-							ie.printStackTrace();
 						}
+
+					} catch (InterruptedException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
 					}
 
-					if (digitalSigRes == null) {
-						// Could not generate threshold signature
-						// Handle this later
-					} else {
-
-						CODEXClientMessage clientRes = new CODEXClientMessage(
-								cm.getNonce(), getServerId(),
-								CODEXClientMessageType.WRITE_SECRET_REPONSE,
-								wsrBytes);
-						clientRes.setSerializedMessageSignature(digitalSigRes
-								.toByteArray());
-
-						// Send back response
-						println("Send back client reponse on host "
-								+ receivePacket.getAddress() + " and port "
-								+ receivePacket.getPort());
-						sendResponseMessage(clientRes,
-								receivePacket.getAddress(),
-								receivePacket.getPort());
-
-					}
 				}
 
-			}
-		}
+				if (digitalSigRes == null) {
+					// Could not generate threshold signature
+					// Handle this later
+					error("Could not generate a valid threshold signature");
+				} else {
 
+					CODEXClientMessage clientRes = new CODEXClientMessage(
+							cm.getNonce(), getServerId(),
+							CODEXClientMessageType.UPDATE_ACCEPT_RESPONSE,
+							wsrBytes);
+					clientRes.setSerializedMessageSignature(digitalSigRes
+							.toByteArray());
+
+					// Send back response
+					println("Send back client reponse on host "
+							+ cm.getAddress() + " and port " + cm.getPort());
+					sendResponseMessage(clientRes, cm.getAddress(),
+							cm.getPort());
+				}
+			}
+
+		}
 	}
 
 	private void println(String string) {
@@ -738,6 +898,16 @@ public class Server implements Runnable {
 		// System.out.println("<"+dateFormatter.format(new Date())+">"+"Server "
 		// + this.getServerId() + " : " + string);
 		System.out.println("<" + (temptimer - timer) + ">" + "Server "
+				+ this.getServerId() + " : " + string);
+		timer = temptimer;
+
+	}
+
+	private void error(String string) {
+		long temptimer = System.currentTimeMillis();
+		// System.out.println("<"+dateFormatter.format(new Date())+">"+"Server "
+		// + this.getServerId() + " : " + string);
+		System.out.println("<" + (temptimer - timer) + ">" + "ERROR : Server "
 				+ this.getServerId() + " : " + string);
 		timer = temptimer;
 
@@ -792,6 +962,37 @@ public class Server implements Runnable {
 		// return serversToSend;
 	}
 
+	public long sendMessageToAllServers(InternalServerMessage ism,
+			CODEXServerMessageType csmt) {
+		println("Sending " + csmt + " message to " + l + " servers");
+		// Clear the server messages queue
+		serverMessages.clear();
+
+		if (ism == null || csmt == null) {
+			return -1;
+		}
+
+		long nonce = new Random().nextLong();
+
+		// Random r = new Random();
+		// Set<Integer> serversToSend = new HashSet<Integer>();
+		// while (serversToSend.size() != l) {
+		// serversToSend.add(r.nextInt(l));
+		// }
+		//
+		// for (Integer in : serversToSend) {
+		// sendMessage(csm, in);
+		// }
+
+		for (int i = 0; i < l; i++) {
+			ism.setDestinationId(i);
+			CODEXServerMessage csm = new CODEXServerMessage(nonce,
+					getServerId(), csmt, SerializationUtil.serialize(ism));
+			sendMessage(csm, i);
+		}
+		return nonce;
+	}
+
 	public void sendMessage(CODEXServerMessage csm, int serverId) {
 		println("Sending message of type " + csm.getType() + " to server "
 				+ serverId);
@@ -819,6 +1020,37 @@ public class Server implements Runnable {
 			e.printStackTrace();
 		}
 	}
+
+	// public void sendMessage(InternalServerMessage ism, CODEXServerMessageType
+	// csmt, long nonce) {
+	// println("Sending message of type " + csmt + " to server "
+	// + serverId);
+	// if (ism == null || csmt == null) {
+	// return;
+	// }
+	//
+	// CODEXServerMessage csm = new CODEXServerMessage(nonce, getServerId(),
+	// csmt, )
+	// csm.setSenderId(getServerId());
+	//
+	// // produce signature
+	// skm.signMessage(csm);
+	//
+	// byte[] dataToSend = SerializationUtil.serialize(csm);
+	//
+	// DatagramPacket dp = new DatagramPacket(dataToSend, dataToSend.length,
+	// serverConnectionInfo.get(serverId).getInetAddress(),
+	// serverConnectionInfo.get(serverId).getPort());
+	// // Send data over the channel to the delegate
+	// // ccm.sendMessageSynchronous(dataToSend);
+	//
+	// try {
+	// serverConnectionSocket.send(dp);
+	// } catch (IOException e) {
+	// // TODO Auto-generated catch block
+	// e.printStackTrace();
+	// }
+	// }
 
 	public void sendResponseMessage(CODEXClientMessage ccm, InetAddress add,
 			int port) {
@@ -877,16 +1109,6 @@ public class Server implements Runnable {
 					serverConnectionSocket.receive(packet);
 
 					handleServerPacket(packet);
-					// AcceptancePacket aPacket = AcceptancePacket
-					// .deserialize(packet.getData());
-					// Set<Integer> count = null;
-					// if (messageCache.containsKey(aPacket.toString())) {
-					// count = messageCache.get(aPacket.toString());
-					// } else {
-					// count = new HashSet<Integer>();
-					// }
-					// count.add((int) aPacket.getSenderId());
-					// messageCache.put(aPacket.toString(), count);
 
 					// printState();
 				} catch (IOException e) {
@@ -913,20 +1135,17 @@ public class Server implements Runnable {
 				return;
 			}
 
-			if (sm.getType()
-					.equals(CODEXServerMessageType.FORWARD_READ_REQUEST)) {
+			if (sm.getType().equals(CODEXServerMessageType.READ_REQUEST)) {
 				CODEXClientMessage ccm = (CODEXClientMessage) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
 
 				// Verify client message
 				if (!skm.verifyClientSignature(ccm)) {
-					// Send a FORWARD_READ_REQUEST_REJECT
-					CODEXServerMessage csm = new CODEXServerMessage(
-							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.FORWARD_READ_REQUEST_REJECT,
-							SerializationUtil.serialize(ccm));
+					// The original server should have verified this before
+					// sending this message
+					// Since it didnt it is assumed compromised
 
-					sendMessage(csm, sm.getSenderId());
+					// Add server to compromised list
 				} else {
 					// Client Message is correct
 					ClientReadRequest crr = (ClientReadRequest) SerializationUtil
@@ -950,7 +1169,7 @@ public class Server implements Runnable {
 					SigShare decryptedShare = stkm.decrypt(cipher);
 					println(decryptedShare.toString());
 
-					// Create the FORWARD_READ_REQUEST_ACCEPT message to send
+					// Create the READ_ACCEPT_RESPONSE message to send
 					// back
 					ForwardReadRequestAccept frra = new ForwardReadRequestAccept(
 							new BigInteger(skm.getSignature(ccm)), cipher,
@@ -958,14 +1177,333 @@ public class Server implements Runnable {
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT,
+							CODEXServerMessageType.READ_ACCEPT_RESPONSE,
 							SerializationUtil.serialize(frra));
 
 					sendMessage(csm, sm.getSenderId());
 				}
 
+			}
+			if (sm.getType().equals(CODEXServerMessageType.TIMESTAMP_REQUEST)) {
+
+				TimeStampRequest tsr = (TimeStampRequest) SerializationUtil
+						.deserialize(sm.getSerializedMessage());
+
+				if (tsr.getDestinationId() != getServerId()) {
+					// Fatal
+					// Message was not meant for me
+					// Seems to be a replay
+					// Handle this later
+				}
+
+				CODEXClientMessage ccm = tsr.getCcm();
+
+				// Verify client message
+				if (!skm.verifyClientSignature(ccm)) {
+					// The original server should have verified this before
+					// sending this message
+					// Since it didnt it is assumed compromised
+
+					// Add server to compromised list
+
+				} else {
+					// Client Message is correct
+					ClientTimeStampRequest ctr = (ClientTimeStampRequest) SerializationUtil
+							.deserialize(ccm.getSerializedMessage());
+
+					BigInteger timestamp = null;
+
+					// Check if some value is locally bound to N
+					SecretShare ss = shareDB.get(ctr.getDataId());
+
+					// If no value is bound, then send back a one timestamp
+					if (ss == null)
+						timestamp = BigInteger.ONE;
+					else {
+						timestamp = ss.getTimestamp();
+					}
+
+					// // Create string with TIMESTAMP_RESPONSE
+					// // Timestamp and MW(n)
+					// String str = timestamp.toString()
+					// + (new BigInteger(SerializationUtil.serialize(ccm))
+					// .toString());
+
+					// Create the FORWARD_WRITE_REQUEST_ACCEPT message to send
+					// back
+					TimeStampResponse tsres = new TimeStampResponse(ccm,
+							timestamp, sm.getSenderId());
+
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(), getServerId(),
+							CODEXServerMessageType.TIMESTAMP_RESPONSE,
+							SerializationUtil.serialize(tsres));
+
+					sendMessage(csm, sm.getSenderId());
+
+				}
+
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.SIGN_READ_RESPONSE_REQUEST)) {
+					CODEXServerMessageType.SIGN_TIMESTAMP_ACCEPT_RESPONSE)) {
+
+				SignTimeStampResponseRequest strr = (SignTimeStampResponseRequest) SerializationUtil
+						.deserialize(sm.getSerializedMessage());
+
+				TimeStampReadResponse trr = strr.getTrr();
+
+				// Check the evidence set
+				Set<CODEXServerMessage> evidenceSetTS = strr.getEvidenceSet();
+				boolean checkFailed = false;
+				if (evidenceSetTS.size() < quorumSize) {
+					error("Evidence Set less than quorumSize : "
+							+ evidenceSetTS.size() + " < " + quorumSize);
+					checkFailed = true;
+				} else {
+
+					for (CODEXServerMessage csmtemp : evidenceSetTS) {
+						// First verify the signature
+						if (skm.verifyServerSignature(csmtemp)) {
+							// Next check the type of message
+							if (!csmtemp.getType().equals(
+									CODEXServerMessageType.TIMESTAMP_RESPONSE)) {
+								checkFailed = true;
+								error("Message type not as expected : "
+										+ CODEXServerMessageType.TIMESTAMP_RESPONSE
+										+ " vs " + csmtemp.getType());
+								break;
+							}
+
+							TimeStampResponse tsr = (TimeStampResponse) SerializationUtil
+									.deserialize(csmtemp.getSerializedMessage());
+
+							// CHeck if strr.getTrr().getCcm() == tsr.getCcm()
+							if (trr == null || tsr == null) {
+								checkFailed = true;
+								error("Response to be signed null");
+								break;
+							}
+
+							if (tsr.getDestinationId() != sm.getSenderId()) {
+								checkFailed = true;
+								error("Message was meant for "
+										+ tsr.getDestinationId() + " and not "
+										+ sm.getSenderId());
+								break;
+							}
+
+							if (trr.getCcm() == null
+									|| !trr.getCcm().equals(tsr.getCcm())) {
+								error("Client messages dont match");
+								checkFailed = true;
+								break;
+							}
+
+						}
+					}
+				}
+
+				if (checkFailed) {
+					// Dont send anything
+					// Add the server to compromised List
+					// Ignore future messages from server
+					println("Checking of evidence Set failed");
+				} else {
+
+					// At this time, the trr will be signed
+					SignedTimeStampResponse str = new SignedTimeStampResponse(
+							stkm.sign(SerializationUtil.serialize(trr)),
+							sm.getSenderId());
+
+					// println("Signed sig : " + srr.getSignedShare());
+					// Now create the response to be sent back
+					// The serialized message contains the brr
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(),
+							getServerId(),
+							CODEXServerMessageType.SIGNED_TIMESTAMP_ACCEPT_RESPONSE,
+							SerializationUtil.serialize(str));
+
+					sendMessage(csm, sm.getSenderId());
+				}
+				// SigShare SignedRes = stkm.sign(brr);
+
+			} else if (sm.getType().equals(
+					CODEXServerMessageType.SIGN_UPDATE_ACCEPT_RESPONSE)) {
+
+				SignUpdateAcceptResponse swrr = (SignUpdateAcceptResponse) SerializationUtil
+						.deserialize(sm.getSerializedMessage());
+
+				ClientUpdateAcceptResponse wsr = swrr.getWsr();
+
+				// Check the evidence set
+				Set<CODEXServerMessage> evidenceSetTS = swrr.getEvidenceSet();
+				boolean checkFailed = false;
+				if (evidenceSetTS.size() < quorumSize) {
+					error("Evidence Set less than quorumSize : "
+							+ evidenceSetTS.size() + " < " + quorumSize);
+					checkFailed = true;
+				} else {
+
+					for (CODEXServerMessage csmtemp : evidenceSetTS) {
+						// First verify the signature
+						if (skm.verifyServerSignature(csmtemp)) {
+							// Next check the type of message
+							if (!csmtemp
+									.getType()
+									.equals(CODEXServerMessageType.UPDATE_ACCEPT_RESPONSE)) {
+								checkFailed = true;
+								error("Message type not as expected : "
+										+ CODEXServerMessageType.UPDATE_ACCEPT_RESPONSE
+										+ " vs " + csmtemp.getType());
+								break;
+							}
+
+							UpdateAcceptResponse uar = (UpdateAcceptResponse) SerializationUtil
+									.deserialize(csmtemp.getSerializedMessage());
+
+							// CHeck if strr.getTrr().getCcm() == tsr.getCcm()
+							if (uar == null || wsr == null) {
+								checkFailed = true;
+								error("Response to be signed null");
+								break;
+							}
+
+							if (uar.getDestinationId() != sm.getSenderId()) {
+								checkFailed = true;
+								error("Message was meant for "
+										+ uar.getDestinationId() + " and not "
+										+ sm.getSenderId());
+								break;
+							}
+
+							if (uar.getCcm() == null) {
+								error("Client message is null");
+								checkFailed = true;
+								break;
+							}
+
+							if (!uar.getCcm().equals(wsr.getCcm())) {
+								error("Client messages dont match");
+								checkFailed = true;
+								break;
+							}
+
+						}
+					}
+				}
+
+				if (checkFailed) {
+					// Dont send anything
+					// Add the server to compromised List
+					// Ignore future messages from server
+					println("Checking of evidence Set failed");
+				} else {
+
+					// At this time, the wsr will be signed
+					SignedUpdateAcceptResponse swr = new SignedUpdateAcceptResponse(
+							stkm.sign(SerializationUtil.serialize(wsr)),
+							sm.getSenderId());
+
+					// println("Signed sig : " + srr.getSignedShare());
+					// Now create the response to be sent back
+					// The serialized message contains the brr
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(),
+							getServerId(),
+							CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE,
+							SerializationUtil.serialize(swr));
+
+					sendMessage(csm, sm.getSenderId());
+				}
+				// SigShare SignedRes = stkm.sign(brr);
+
+			} else if (sm.getType().equals(
+					CODEXServerMessageType.SIGN_UPDATE_REJECT_RESPONSE)) {
+
+				SignUpdateRejectReponse swrrr = (SignUpdateRejectReponse) SerializationUtil
+						.deserialize(sm.getSerializedMessage());
+
+				ClientUpdateRejectResponse wrr = swrrr.getWrr();
+
+				// Check the evidence set
+				Set<CODEXServerMessage> evidenceSetTS = swrrr.getEvidenceSet();
+				boolean checkFailed = false;
+				if (evidenceSetTS.size() < (t + 1)) {
+					error("Evidence Set less than (t+1) : "
+							+ evidenceSetTS.size() + " < " + (t + 1));
+					checkFailed = true;
+				} else {
+
+					for (CODEXServerMessage csmtemp : evidenceSetTS) {
+						// First verify the signature
+						if (skm.verifyServerSignature(csmtemp)) {
+							// Next check the type of message
+							if (!csmtemp
+									.getType()
+									.equals(CODEXServerMessageType.UPDATE_REJECT_RESPONSE)) {
+								checkFailed = true;
+								error("Message type not as expected : "
+										+ CODEXServerMessageType.UPDATE_REJECT_RESPONSE
+										+ " vs " + csmtemp.getType());
+								break;
+							}
+
+							UpdateRejectResponse urr = (UpdateRejectResponse) SerializationUtil
+									.deserialize(csmtemp.getSerializedMessage());
+
+							// CHeck if strr.getTrr().getCcm() == tsr.getCcm()
+							if (urr == null || wrr == null) {
+								checkFailed = true;
+								error("Response to be signed null");
+								break;
+							}
+
+							if (urr.getDestinationId() != sm.getSenderId()) {
+								checkFailed = true;
+								error("Message was meant for "
+										+ urr.getDestinationId() + " and not "
+										+ sm.getSenderId());
+								break;
+							}
+
+							if (urr.getCcm() == null
+									|| !urr.getCcm().equals(wrr.getCcm())) {
+								error("Client messages dont match");
+								checkFailed = true;
+								break;
+							}
+
+						}
+					}
+				}
+
+				if (checkFailed) {
+					// Dont send anything
+					// Add the server to compromised List
+					// Ignore future messages from server
+					println("Checking of evidence Set failed");
+				} else {
+
+					// At this time, the wsr will be signed
+					SignedUpdateRejectResponse swrr = new SignedUpdateRejectResponse(
+							stkm.sign(SerializationUtil.serialize(wrr)),
+							sm.getSenderId());
+
+					// println("Signed sig : " + srr.getSignedShare());
+					// Now create the response to be sent back
+					// The serialized message contains the brr
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(),
+							getServerId(),
+							CODEXServerMessageType.SIGNED_UPDATE_REJECT_RESPONSE,
+							SerializationUtil.serialize(swrr));
+
+					sendMessage(csm, sm.getSenderId());
+				}
+				// SigShare SignedRes = stkm.sign(brr);
+
+			} else if (sm.getType().equals(
+					CODEXServerMessageType.SIGN_READ_ACCEPT_RESPONSE)) {
 
 				SignReadResponseRequest srrr = (SignReadResponseRequest) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
@@ -984,7 +1522,7 @@ public class Server implements Runnable {
 				// The serialized message contains the brr
 				CODEXServerMessage csm = new CODEXServerMessage(sm.getNonce(),
 						getServerId(),
-						CODEXServerMessageType.SIGNED_READ_RESPONSE,
+						CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE,
 						SerializationUtil.serialize(srr));
 
 				sendMessage(csm, sm.getSenderId());
@@ -992,280 +1530,134 @@ public class Server implements Runnable {
 				// SigShare SignedRes = stkm.sign(brr);
 
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)
+					CODEXServerMessageType.READ_ACCEPT_RESPONSE)
+					|| sm.getType().equals(
+							CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE)
+
+					|| sm.getType().equals(
+							CODEXServerMessageType.TIMESTAMP_RESPONSE)
 					|| sm.getType()
-							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT)
+							.equals(CODEXServerMessageType.SIGNED_TIMESTAMP_ACCEPT_RESPONSE)
+
+					|| sm.getType().equals(
+							CODEXServerMessageType.UPDATE_ACCEPT_RESPONSE)
+					|| sm.getType().equals(
+							CODEXServerMessageType.UPDATE_REJECT_RESPONSE)
 					|| sm.getType()
-							.equals(CODEXServerMessageType.TIMESTAMP_RESPONSE)
-					|| sm.getType().equals(
-							CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
-					|| sm.getType().equals(
-							CODEXServerMessageType.SIGNED_READ_RESPONSE)
-					|| sm.getType().equals(
-							CODEXServerMessageType.VERIFIED_WRITE_REQUEST)) {
+							.equals(CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE)
+					|| sm.getType()
+							.equals(CODEXServerMessageType.SIGNED_UPDATE_REJECT_RESPONSE)
+
+			) {
 
 				println("Added a CODEX_SERVER_MESSAGE:" + sm.getType()
 						+ " in message queue with nonce " + sm.getNonce());
 				serverMessages.add(sm);
 
-				// Object objectToCheck = serverCheckCache.get(sm.getNonce());
-				// if (objectToCheck == null) {
-				// println("No object to check the message against. Ignore message");
-				// } else {
-				//
-				// ForwardReadRequestAccept frra = (ForwardReadRequestAccept)
-				// SerializationUtil
-				// .deserialize(sm.getSerializedMessage());
-				//
-				// // Now check the signature of MR(n)
-				// if (skm.verifyServerSignature(SerializationUtil
-				// .serialize(objectToCheck), frra.getDigitalSig()
-				// .toByteArray(), sm.getSenderId())) {
-				//
-				// // Now check the validity of the decrypted partial
-				// // share
-				// if (stkm.verifyDecryptedShare(frra.getCipher()
-				// .toByteArray(), frra.getDecryptedShare())) {
-				//
-				// // The message is verified and is valid
-				// println("Verified and Added a CODEX_SERVER_MESSAGE:"
-				// + sm.getType()
-				// + " in message queue with nonce "
-				// + sm.getNonce());
-				// // Add the message to the message cache
-				// serverMessages.add(sm);
-				//
-				// // Set<CODEXServerMessage> messageSet = messageCache
-				// // .get(sm.getNonce());
-				// // if (messageSet != null
-				// // && messageSet.size() == (2 * t + 1)) {
-				// // // Already received a quorum of correct
-				// // // messages, so ignore this message
-				// // println("Ignoring the message");
-				// // } else {
-				// //
-				// // if (messageSet == null) {
-				// // // messageSet =
-				// // // Collections.synchronizedSet(new
-				// // // HashSet<CODEXServerMessage>());
-				// // messageSet = new HashSet<CODEXServerMessage>();
-				// // messageCache.put(sm.getNonce(), messageSet);
-				// // }
-				// // messageSet.add(sm);
-				// // println("Message Set size : "
-				// // + messageSet.size());
-				// // }
-				// }
-				// }
-				// }
-				//
-				// } else if (sm.getType().equals(
-				// CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT)
-				// || sm.getType().equals(
-				// CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
-				// || sm.getType().equals(
-				// CODEXServerMessageType.SIGNED_READ_RESPONSE)
-				// || sm.getType().equals(
-				// CODEXServerMessageType.VERIFIED_WRITE_REQUEST)) {
-				//
-				// println("Added a CODEX_SERVER_MESSAGE:" + sm.getType()
-				// + " in message queue with nonce " + sm.getNonce());
-				// // Add the message to the message cache
-				// Set<CODEXServerMessage> messageSet = messageCache.get(sm
-				// .getNonce());
-				// if (messageSet == null) {
-				// // messageSet = Collections.synchronizedSet(new
-				// // HashSet<CODEXServerMessage>());
-				// messageSet = new HashSet<CODEXServerMessage>();
-				// messageCache.put(sm.getNonce(), messageSet);
-				// }
-				// messageSet.add(sm);
-				// println("Message Set size : " + messageSet.size());
-
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.TIMESTAMP_REQUEST)) {
+					CODEXServerMessageType.UPDATE_REQUEST)) {
 
-				TimeStampRequest tsr = (TimeStampRequest) SerializationUtil
+				UpdateRequest ur = (UpdateRequest) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
-				CODEXClientMessage ccm = tsr.getCcm();
+				boolean checkFailed = false;
 
-				// Verify client message
-				if (!skm.verifyClientSignature(ccm)) {
-					// Send a FORWARD_WRITE_REQUEST_REJECT
-					CODEXServerMessage csm = new CODEXServerMessage(
-							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.TIMESTAMP_REQUEST_REJECT,
-							SerializationUtil.serialize(ccm));
-
-					sendMessage(csm, sm.getSenderId());
-				} else {
-					// Client Message is correct
-					ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
-							.deserialize(ccm.getSerializedMessage());
-
-					BigInteger timestamp = null;
-
-					// Check if some value is locally bound to N
-					SecretShare ss = shareDB.get(crw.getDataId());
-
-					// If no value is bound, then send back a one timestamp
-					if (ss == null)
-						timestamp = BigInteger.ONE;
-					else {
-						timestamp = ss.getTimestamp();
-					}
-
-					// Create string with TIMESTAMP_RESPONSE
-					// Timestamp and MW(n)
-					String str = CODEXServerMessageType.TIMESTAMP_RESPONSE
-							+ timestamp.toString()
-							+ (new BigInteger(SerializationUtil.serialize(ccm))
-									.toString());
-
-					// Create the FORWARD_WRITE_REQUEST_ACCEPT message to send
-					// back
-					TimeStampResponse tsres = new TimeStampResponse(
-							new BigInteger(skm.getSignature(str)), timestamp);
-
-					CODEXServerMessage csm = new CODEXServerMessage(
-							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.TIMESTAMP_RESPONSE,
-							SerializationUtil.serialize(tsres));
-
-					sendMessage(csm, sm.getSenderId());
+				if (ur.getCcm() == null) {
+					checkFailed = true;
 				}
 
-			} else if (sm.getType().equals(
-					CODEXServerMessageType.FORWARD_WRITE_REQUEST)) {
-				
-				
-				ForwardWriteRequest fwr = (ForwardWriteRequest) SerializationUtil
-						.deserialize(sm.getSerializedMessage());
-				
-				CODEXClientMessage ccm  = fwr.getCwr();
+				if (!skm.verifyClientSignature(ur.getCcm())) {
+					checkFailed = true;
+				}
 
-				// Verify client message
-				if (!skm.verifyClientSignature(ccm)) {
-					// Send a FORWARD_WRITE_REQUEST_REJECT
-					CODEXServerMessage csm = new CODEXServerMessage(
-							sm.getNonce(),
-							getServerId(),
-							CODEXServerMessageType.FORWARD_WRITE_REQUEST_REJECT,
-							SerializationUtil.serialize(ccm));
+				// Add the client message to the clientMessages queue
+				// Become the delegate for this client Message if not already
+				// processed
+				
+				if(sm.getSenderId() != getServerId())
+					addClientMessage(ur.getCcm());
 
-					sendMessage(csm, sm.getSenderId());
-				} else {
-					//Verify the evidence Set 
-					//Do this later
-					
-					// Client Message is correct
-					ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
-							.deserialize(ccm.getSerializedMessage());
+				ClientUpdateRequest cwr = (ClientUpdateRequest) SerializationUtil
+						.deserialize(ur.getCcm().getSerializedMessage());
+				CODEXClientMessage ccm = cwr.getCcm();
+				if (ccm == null
+						|| !ccm.getType().equals(
+								CODEXClientMessageType.TIMESTAMP_RESPONSE)
+						|| !stkm.verifySignature(ccm)) {
+					checkFailed = true;
+				}
 
+				if (checkFailed) {
+					// Then check failed
+					// Ignore the client request
+					// Add server to compromised list
+					println("CHECK for TIMESTAMP_RESPONSE FAILED");
+					return;
+				}
+
+				TimeStampReadResponse trr = (TimeStampReadResponse) SerializationUtil
+						.deserialize(ccm.getSerializedMessage());
+				BigInteger correctTimeStamp = trr.getTimestamp().add(
+						BigInteger.ONE);
+
+				// Verify the evidence Set
+				// Do this later
+
+				BigInteger dbTS = getTimestampFromDB(cwr.getDataId());
+				if (dbTS.compareTo(correctTimeStamp) == -1) {
+					// Local TS < Update TS
+					// Update the share and send back an update_accept message
 					// ?? Locally bind E(s) to name N ??
-					println("Updating dataId "+crw.getDataId()+" with timestamp "+fwr.getTimestamp() +" and secret "+crw.getEncryptedSecret());
-					shareDB.put(crw.getDataId(), new SecretShare(fwr.getTimestamp(), crw.getEncryptedSecret()));
-					
-					// Create string with FORWARD_WRITE_REQUEST_ACCEPT
-					// Timestamp and MW(n)
-					String str = CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT
-							+ fwr.getTimestamp().toString()
-							+ (new BigInteger(SerializationUtil.serialize(ccm))
-									.toString());
-					
-					
-					// Create the FORWARD_WRITE_REQUEST_ACCEPT message to send
-					// back
-					ForwardWriteRequestAccept frrw = new ForwardWriteRequestAccept(
-							new BigInteger(skm.getSignature(str)));
+					println("Updating dataId " + cwr.getDataId()
+							+ " with timestamp " + correctTimeStamp
+							+ " and secret " + cwr.getEncryptedSecret());
+					shareDB.put(cwr.getDataId(), new SecretShare(
+							correctTimeStamp, cwr.getEncryptedSecret()));
 
-					CODEXServerMessage csm = new CODEXServerMessage(
-							sm.getNonce(),
-							getServerId(),
-							CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT,
-							SerializationUtil.serialize(frrw));
-
-					sendMessage(csm, sm.getSenderId());
-				}
-
-			} else if (sm.getType().equals(
-					CODEXServerMessageType.VERIFY_WRITE_REQUEST)) {
-
-				VerifyWriteRequest vwr = (VerifyWriteRequest) SerializationUtil
-						.deserialize(sm.getSerializedMessage());
-
-				// the signature of sender Server is already verified above
-
-				// Verify the evidence Set Ed
-				// To do later
-				// Just do basic check to see if size is at least 2t+1
-				if (vwr.getEvidenceSet().size() < (2 * t + 1)) {
-					// Evidence set check fail
-					// Send REJECT message
-					// later
-
-				} else {
-					// Evidence set check passes
-
-					// Bind E(s) from MW(n) to name N
-					ClientWriteRequest cwr = vwr.getCwr();
-
-					// ?? Verify signature of MW(n) here ??
-					BigInteger ts = null;
-//					if (shareDB.containsKey(cwr.getDataId())) {
-//						ts = shareDB.get(cwr.getDataId()).getTimestamp();
-//					} else {
-//						ts = BigInteger.ZERO;
-//					}
-
-					// Update db here
-					println("Updating dataId "+cwr.getDataId()+" with timestamp "+vwr.getTimestamp() +" and secret "+cwr.getEncryptedSecret());
-
-					shareDB.put(
-							cwr.getDataId(),
-							new SecretShare(vwr.getTimestamp(), cwr
-									.getEncryptedSecret()));
-
-					// Send VERIFIED message back to sender Server
-					VerifiedWriteRequest vdwr = new VerifiedWriteRequest(
-							new BigInteger(skm.getSignature(vwr.getWsr())));
+					UpdateAcceptResponse uar = new UpdateAcceptResponse(
+							ur.getCcm(), sm.getSenderId());
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.VERIFIED_WRITE_REQUEST,
-							SerializationUtil.serialize(vdwr));
+							CODEXServerMessageType.UPDATE_ACCEPT_RESPONSE,
+							SerializationUtil.serialize(uar));
+
+					sendMessage(csm, sm.getSenderId());
+
+				} else {
+					// Local TS >= Update TS
+					// Send back a reject message to the original server
+					// This is required for the original server to create
+					// evidence set for reject message
+					// to be sent back to client
+
+					UpdateRejectResponse urr = new UpdateRejectResponse(
+							ur.getCcm(), sm.getSenderId());
+
+					CODEXServerMessage csm = new CODEXServerMessage(
+							sm.getNonce(), getServerId(),
+							CODEXServerMessageType.UPDATE_REJECT_RESPONSE,
+							SerializationUtil.serialize(urr));
 
 					sendMessage(csm, sm.getSenderId());
 
 				}
 
-			} else if (sm.getType().equals(
-					CODEXServerMessageType.SIGN_WRITE_RESPONSE_REQUEST)) {
+			}
+		}
 
-				SignWriteResponseRequest swrr = (SignWriteResponseRequest) SerializationUtil
-						.deserialize(sm.getSerializedMessage());
-
-				// Check the evidence set
-				// To be done later
-
-				WriteSecretResponse wsr = swrr.getWsr();
-
-				// At this time, the wsr will be signed
-				SignedWriteResponse swr = new SignedWriteResponse(
-						stkm.sign(SerializationUtil.serialize(wsr)));
-
-				// println("Signed sig : " + srr.getSignedShare());
-				// Now create the response to be sent back
-				// The serialized message contains the brr
-				CODEXServerMessage csm = new CODEXServerMessage(sm.getNonce(),
-						getServerId(),
-						CODEXServerMessageType.SIGNED_WRITE_RESPONSE,
-						SerializationUtil.serialize(swr));
-
-				sendMessage(csm, sm.getSenderId());
-
-				// SigShare SignedRes = stkm.sign(brr);
-
+		private void addClientMessage(CODEXClientMessage ccm) {
+			
+			if (!clientMessagesProcessed.contains(ccm.getNonce())) {
+				if (!clientMessages.contains(ccm)) {
+					clientMessages.offer(ccm);
+					clientMessagesProcessed.add(ccm.getNonce());
+				} else {
+					println("Client message already added to queue. Nonce : "
+							+ ccm.getNonce());
+				}
+			} else {
+				println("Client message already processed. Nonce : "
+						+ ccm.getNonce());
 			}
 		}
 	}
@@ -1298,11 +1690,19 @@ public class Server implements Runnable {
 		printState();
 	}
 
-	public boolean isNonceEqual(CODEXServerMessage csm1, CODEXServerMessage csm2 ){
-		if(csm1 == null)
+	public boolean isNonceEqual(CODEXServerMessage csm1, CODEXServerMessage csm2) {
+		if (csm1 == null)
 			return false;
-		if(csm2 == null)
+		if (csm2 == null)
 			return false;
 		return csm1.getNonce() == csm2.getNonce();
+	}
+
+	public BigInteger getTimestampFromDB(String dataId) {
+		SecretShare ss = shareDB.get(dataId);
+		if (ss == null) {
+			return BigInteger.ONE;
+		} else
+			return ss.getTimestamp();
 	}
 }

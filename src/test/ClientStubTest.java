@@ -56,7 +56,7 @@ public class ClientStubTest {
 
 			CODEXClientMessage cm = new CODEXClientMessage(
 					new Random().nextInt(), 1,
-					CODEXClientMessageType.CLIENT_READ_SECRET_REQUEST, data);
+					CODEXClientMessageType.CLIENT_READ_REQUEST, data);
 			// cs.sendMessage(cm, true);
 
 			// CODEXMessage cm2 = new CODEXMessage(cm.getSerializedMessage());
@@ -101,15 +101,17 @@ public class ClientStubTest {
 				//
 				// CODEXClientMessage cm = new CODEXClientMessage(
 				// new Random().nextInt(), 0,
-				// CODEXClientMessageType.CLIENT_READ_SECRET_REQUEST, data);
+				// CODEXClientMessageType.CLIENT_READ_REQUEST, data);
 				//cs.getSecret("test");
 
 				int MAX_TRIES = 5;
 				int tries = 0;
 				
 				//cs.getSecret("test");
-				cs.setSecret("test3", "helloworld4");
+				cs.setSecret("test", "helloworld1", 10);
 				cs.getSecret("test");
+				
+				//cs.getTimeStamp("test");
 				//while(!cs.setSecret("test3", "helloworld4") && tries++ < MAX_TRIES);
 				
 				tries = 0;

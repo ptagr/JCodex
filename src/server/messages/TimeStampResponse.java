@@ -3,31 +3,33 @@ package server.messages;
 import java.io.Serializable;
 import java.math.BigInteger;
 
-public class TimeStampResponse implements Serializable{
+import client.messages.CODEXClientMessage;
+
+public class TimeStampResponse extends InternalServerMessage implements Serializable {
 
 	/**
 	 * 
 	 */
 	private static final long serialVersionUID = 4109941588742892050L;
 
-	private BigInteger digitalSig;
+	private CODEXClientMessage ccm;;
 		
 	private BigInteger timeStamp;
 
-	public TimeStampResponse(BigInteger digitalSig,
+	public TimeStampResponse(CODEXClientMessage ccm,
 			BigInteger timestamp) {
 		super();
-		this.setDigitalSig(digitalSig);
+		this.setCcm(ccm);
 		this.setTimeStamp(timestamp);
 	}
 
-	public BigInteger getDigitalSig() {
-		return digitalSig;
+	public TimeStampResponse(CODEXClientMessage ccm,
+			BigInteger timestamp, int destId) {
+		super(destId);
+		this.setCcm(ccm);
+		this.setTimeStamp(timestamp);
 	}
-
-	public void setDigitalSig(BigInteger digitalSig) {
-		this.digitalSig = digitalSig;
-	}
+	
 
 	public BigInteger getTimeStamp() {
 		return timeStamp;
@@ -35,6 +37,18 @@ public class TimeStampResponse implements Serializable{
 
 	public void setTimeStamp(BigInteger timeStamp) {
 		this.timeStamp = timeStamp;
+	}
+
+
+
+	public CODEXClientMessage getCcm() {
+		return ccm;
+	}
+
+
+
+	public void setCcm(CODEXClientMessage ccm) {
+		this.ccm = ccm;
 	}
 	
 	

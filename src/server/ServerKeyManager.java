@@ -1,8 +1,6 @@
 package server;
 
-import java.math.BigInteger;
 import java.security.InvalidKeyException;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -13,15 +11,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 
-import client.messages.CODEXClientMessage;
-
-import junit.framework.Assert;
-
 import main.Constants;
 import server.messages.CODEXServerMessage;
-import threshsig.SigShare;
 import utils.KeyUtility;
 import utils.SerializationUtil;
+import client.messages.CODEXClientMessage;
 
 public class ServerKeyManager implements Runnable {
 
@@ -141,8 +135,10 @@ public class ServerKeyManager implements Runnable {
 	public boolean verifyClientSignature(CODEXClientMessage cm) {
 		Signature signEngine = clientSignatureEngines.get(cm.getSenderId());
 
-		if (signEngine == null)
+		if (signEngine == null){
+			System.out.println("Client SignEngine null for client Id "+cm.getSenderId());
 			return false;
+		}
 		try {
 			signEngine.update(cm.getSerializedMessage());
 			return signEngine.verify(cm.getSerializedMessageSignature());

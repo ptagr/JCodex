@@ -23,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import client.messages.CODEXClientMessage;
 import client.messages.CODEXClientMessageType;
 import client.messages.ClientReadRequest;
-import client.messages.ClientWriteRequest;
+import client.messages.ClientUpdateRequest;
 
 import main.AccessOrderCache;
 import main.ConnectionInfo;
@@ -33,12 +33,12 @@ import server.messages.CODEXServerMessageType;
 import server.messages.ForwardReadRequestAccept;
 import server.messages.ForwardWriteRequestAccept;
 import server.messages.SignReadResponseRequest;
-import server.messages.SignWriteResponseRequest;
+import server.messages.SignUpdateAcceptResponse;
 import server.messages.SignedReadResponse;
-import server.messages.SignedWriteResponse;
+import server.messages.SignedUpdateAcceptResponse;
 import server.messages.VerifiedWriteRequest;
 import server.messages.VerifyWriteRequest;
-import server.messages.WriteSecretResponse;
+import server.messages.ClientUpdateAcceptResponse;
 import threshsig.SigShare;
 import utils.SerializationUtil;
 import utils.TimeUtility;
@@ -167,17 +167,17 @@ public class CopyOfServer implements Runnable {
 		}
 
 		if (cm.getType().equals(
-				CODEXClientMessageType.CLIENT_READ_SECRET_REQUEST)) {
+				CODEXClientMessageType.CLIENT_READ_REQUEST)) {
 			ClientReadRequest crr = (ClientReadRequest) SerializationUtil
 					.deserialize(cm.getSerializedMessage());
 			// println(crr.getEncryptedBlindingFactor().toString());
 
 			CODEXServerMessage csm = new CODEXServerMessage(
 					new Random().nextLong(), getServerId(),
-					CODEXServerMessageType.FORWARD_READ_REQUEST,
+					CODEXServerMessageType.READ_REQUEST,
 					SerializationUtil.serialize(cm));
 
-			println("Forwarding CLIENT_READ_SECRET_REQUEST message to "
+			println("Forwarding CLIENT_READ_REQUEST message to "
 					+ (3 * t + 1) + " servers");
 
 			// Make an entry in serverCheckCache of <nonce, MR(n)>
@@ -214,7 +214,7 @@ public class CopyOfServer implements Runnable {
 						break;
 					}
 					if (csmtemp.getType().equals(
-							CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)) {
+							CODEXServerMessageType.READ_ACCEPT_RESPONSE)) {
 						ForwardReadRequestAccept frra = (ForwardReadRequestAccept) SerializationUtil
 								.deserialize(csmtemp.getSerializedMessage());
 
@@ -261,7 +261,7 @@ public class CopyOfServer implements Runnable {
 			//
 			// for (CODEXServerMessage csmtemp : csmSet) {
 			// if (csmtemp.getType().equals(
-			// CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)) {
+			// CODEXServerMessageType.READ_ACCEPT_RESPONSE)) {
 			// ForwardReadRequestAccept frra = (ForwardReadRequestAccept)
 			// SerializationUtil
 			// .deserialize(csmtemp.getSerializedMessage());
@@ -335,7 +335,7 @@ public class CopyOfServer implements Runnable {
 
 				CODEXServerMessage csm2 = new CODEXServerMessage(
 						new Random().nextLong(), getServerId(),
-						CODEXServerMessageType.SIGN_READ_RESPONSE_REQUEST,
+						CODEXServerMessageType.SIGN_READ_ACCEPT_RESPONSE,
 						SerializationUtil.serialize(srrr));
 
 				// Invoke a threshold signature protocol with 3t+1 servers
@@ -371,7 +371,7 @@ public class CopyOfServer implements Runnable {
 						}
 
 						if (csmtemp.getType().equals(
-								CODEXServerMessageType.SIGNED_READ_RESPONSE)) {
+								CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE)) {
 							SignedReadResponse srr = (SignedReadResponse) SerializationUtil
 									.deserialize(csmtemp.getSerializedMessage());
 
@@ -436,10 +436,10 @@ public class CopyOfServer implements Runnable {
 			}
 
 		} else if (cm.getType().equals(
-				CODEXClientMessageType.CLIENT_WRITE_SECRET_REQUEST)) {
+				CODEXClientMessageType.CLIENT_UPDATE_REQUEST)) {
 
 			// Write Protocol starts here
-			ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
+			ClientUpdateRequest crw = (ClientUpdateRequest) SerializationUtil
 					.deserialize(cm.getSerializedMessage());
 			// println(crr.getEncryptedBlindingFactor().toString());
 
@@ -502,7 +502,7 @@ public class CopyOfServer implements Runnable {
 					// Received 2t+1 pieces of evidence
 
 					// Create the write reponse to be sent to client
-					WriteSecretResponse wsr = new WriteSecretResponse(crw,
+					ClientUpdateAcceptResponse wsr = new ClientUpdateAcceptResponse(crw,
 							crw.getDataId());
 
 					// Create the VERIFY message to be sent to other servers
@@ -562,13 +562,13 @@ public class CopyOfServer implements Runnable {
 					} else {
 
 						// Create the sign request
-						SignWriteResponseRequest swrr = new SignWriteResponseRequest(
+						SignUpdateAcceptResponse swrr = new SignUpdateAcceptResponse(
 								verifiedEvidenceSet, wsr);
 
 						CODEXServerMessage csm_swrr = new CODEXServerMessage(
 								new Random().nextLong(),
 								getServerId(),
-								CODEXServerMessageType.SIGN_WRITE_RESPONSE_REQUEST,
+								CODEXServerMessageType.SIGN_UPDATE_ACCEPT_RESPONSE,
 								SerializationUtil.serialize(swrr));
 
 						// Invoke a threshold signature protocol with 3t+1
@@ -607,8 +607,8 @@ public class CopyOfServer implements Runnable {
 							for (CODEXServerMessage csmtemp : csmSet2) {
 								if (csmtemp
 										.getType()
-										.equals(CODEXServerMessageType.SIGNED_WRITE_RESPONSE)) {
-									SignedWriteResponse swr = (SignedWriteResponse) SerializationUtil
+										.equals(CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE)) {
+									SignedUpdateAcceptResponse swr = (SignedUpdateAcceptResponse) SerializationUtil
 											.deserialize(csmtemp
 													.getSerializedMessage());
 
@@ -640,7 +640,7 @@ public class CopyOfServer implements Runnable {
 							CODEXClientMessage clientRes = new CODEXClientMessage(
 									cm.getNonce(),
 									getServerId(),
-									CODEXClientMessageType.WRITE_SECRET_REPONSE,
+									CODEXClientMessageType.UPDATE_ACCEPT_RESPONSE,
 									wsrBytes);
 							clientRes
 									.setSerializedMessageSignature(digitalSigRes
@@ -838,7 +838,7 @@ public class CopyOfServer implements Runnable {
 			}
 
 			if (sm.getType()
-					.equals(CODEXServerMessageType.FORWARD_READ_REQUEST)) {
+					.equals(CODEXServerMessageType.READ_REQUEST)) {
 				CODEXClientMessage ccm = (CODEXClientMessage) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
 
@@ -874,7 +874,7 @@ public class CopyOfServer implements Runnable {
 					SigShare decryptedShare = stkm.decrypt(cipher);
 					println(decryptedShare.toString());
 
-					// Create the FORWARD_READ_REQUEST_ACCEPT message to send
+					// Create the READ_ACCEPT_RESPONSE message to send
 					// back
 					ForwardReadRequestAccept frra = new ForwardReadRequestAccept(
 							new BigInteger(skm.getSignature(ccm)), cipher,
@@ -882,14 +882,14 @@ public class CopyOfServer implements Runnable {
 
 					CODEXServerMessage csm = new CODEXServerMessage(
 							sm.getNonce(), getServerId(),
-							CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT,
+							CODEXServerMessageType.READ_ACCEPT_RESPONSE,
 							SerializationUtil.serialize(frra));
 
 					sendMessage(csm, sm.getSenderId());
 				}
 
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.SIGN_READ_RESPONSE_REQUEST)) {
+					CODEXServerMessageType.SIGN_READ_ACCEPT_RESPONSE)) {
 
 				SignReadResponseRequest srrr = (SignReadResponseRequest) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
@@ -908,7 +908,7 @@ public class CopyOfServer implements Runnable {
 				// The serialized message contains the brr
 				CODEXServerMessage csm = new CODEXServerMessage(sm.getNonce(),
 						getServerId(),
-						CODEXServerMessageType.SIGNED_READ_RESPONSE,
+						CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE,
 						SerializationUtil.serialize(srr));
 
 				sendMessage(csm, sm.getSenderId());
@@ -916,13 +916,13 @@ public class CopyOfServer implements Runnable {
 				// SigShare SignedRes = stkm.sign(brr);
 
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.FORWARD_READ_REQUEST_ACCEPT)
+					CODEXServerMessageType.READ_ACCEPT_RESPONSE)
 					|| sm.getType()
 							.equals(CODEXServerMessageType.FORWARD_WRITE_REQUEST_ACCEPT)
 					|| sm.getType().equals(
-							CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
+							CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE)
 					|| sm.getType().equals(
-							CODEXServerMessageType.SIGNED_READ_RESPONSE)
+							CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE)
 					|| sm.getType().equals(
 							CODEXServerMessageType.VERIFIED_WRITE_REQUEST)) {
 
@@ -986,7 +986,7 @@ public class CopyOfServer implements Runnable {
 				// || sm.getType().equals(
 				// CODEXServerMessageType.SIGNED_WRITE_RESPONSE)
 				// || sm.getType().equals(
-				// CODEXServerMessageType.SIGNED_READ_RESPONSE)
+				// CODEXServerMessageType.SIGNED_READ_ACCEPT_RESPONSE)
 				// || sm.getType().equals(
 				// CODEXServerMessageType.VERIFIED_WRITE_REQUEST)) {
 				//
@@ -1021,7 +1021,7 @@ public class CopyOfServer implements Runnable {
 					sendMessage(csm, sm.getSenderId());
 				} else {
 					// Client Message is correct
-					ClientWriteRequest crw = (ClientWriteRequest) SerializationUtil
+					ClientUpdateRequest crw = (ClientUpdateRequest) SerializationUtil
 							.deserialize(ccm.getSerializedMessage());
 
 					// ?? Locally bind E(s) to name N ??
@@ -1060,7 +1060,7 @@ public class CopyOfServer implements Runnable {
 					// Evidence set check passes
 
 					// Bind E(s) from MW(n) to name N
-					ClientWriteRequest cwr = vwr.getCwr();
+					ClientUpdateRequest cwr = vwr.getCwr();
 
 					// ?? Verify signature of MW(n) here ??
 					BigInteger ts = null;
@@ -1090,18 +1090,18 @@ public class CopyOfServer implements Runnable {
 				}
 
 			} else if (sm.getType().equals(
-					CODEXServerMessageType.SIGN_WRITE_RESPONSE_REQUEST)) {
+					CODEXServerMessageType.SIGN_UPDATE_ACCEPT_RESPONSE)) {
 
-				SignWriteResponseRequest swrr = (SignWriteResponseRequest) SerializationUtil
+				SignUpdateAcceptResponse swrr = (SignUpdateAcceptResponse) SerializationUtil
 						.deserialize(sm.getSerializedMessage());
 
 				// Check the evidence set
 				// To be done later
 
-				WriteSecretResponse wsr = swrr.getWsr();
+				ClientUpdateAcceptResponse wsr = swrr.getWsr();
 
 				// At this time, the wsr will be signed
-				SignedWriteResponse swr = new SignedWriteResponse(
+				SignedUpdateAcceptResponse swr = new SignedUpdateAcceptResponse(
 						stkm.sign(SerializationUtil.serialize(wsr)));
 
 				// println("Signed sig : " + srr.getSignedShare());
@@ -1109,7 +1109,7 @@ public class CopyOfServer implements Runnable {
 				// The serialized message contains the brr
 				CODEXServerMessage csm = new CODEXServerMessage(sm.getNonce(),
 						getServerId(),
-						CODEXServerMessageType.SIGNED_WRITE_RESPONSE,
+						CODEXServerMessageType.SIGNED_UPDATE_ACCEPT_RESPONSE,
 						SerializationUtil.serialize(swr));
 
 				sendMessage(csm, sm.getSenderId());

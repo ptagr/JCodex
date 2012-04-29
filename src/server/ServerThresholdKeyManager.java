@@ -10,11 +10,11 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Set;
 
 import main.Constants;
-import server.messages.ForwardReadRequestAccept;
 import threshsig.GroupKey;
 import threshsig.KeyShare;
 import threshsig.SigShare;
 import utils.SerializationUtil;
+import client.messages.CODEXClientMessage;
 
 public class ServerThresholdKeyManager {
 	private static GroupKey gk;
@@ -158,10 +158,44 @@ public class ServerThresholdKeyManager {
 
 	}
 
+	/**
+	 * Verify the CODEX signature 
+	 * @param data
+	 * @param signature
+	 * @return
+	 */
 	public boolean verifySignature(byte[] data, BigInteger signature) {
 
 		byte[] bi = getMessageDigest(data);
 
+		// /BigInteger recdSign = new
+		// BigInteger(ccm.getSerializedMessageSignature());
+		BigInteger recdHash = signature.modPow(gk.getExponent(),
+				gk.getModulus());
+
+		BigInteger hash = new BigInteger(1, bi);
+		println("Verify signature : Data to verify : "
+				+ new BigInteger(1, bi).toString());
+
+		println(new BigInteger(bi).equals(recdHash));
+
+		return hash.equals(recdHash);
+
+	}
+	
+	/**
+	 * Verify the CODEX signature 
+	 * @param data
+	 * @param signature
+	 * @return
+	 */
+	public boolean verifySignature(CODEXClientMessage ccm) {
+
+		if(ccm == null || ccm.getSerializedMessage() == null || ccm.getSerializedMessageSignature() == null){
+			return false;
+		}
+		byte[] bi = getMessageDigest(ccm.getSerializedMessage());
+		BigInteger signature = new BigInteger(1,ccm.getSerializedMessageSignature());
 		// /BigInteger recdSign = new
 		// BigInteger(ccm.getSerializedMessageSignature());
 		BigInteger recdHash = signature.modPow(gk.getExponent(),
