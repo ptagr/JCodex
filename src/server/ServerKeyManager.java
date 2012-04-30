@@ -11,6 +11,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 
+import proactive.messages.PRSMessage;
+
 import main.Constants;
 import server.messages.CODEXServerMessage;
 import utils.KeyUtility;
@@ -24,6 +26,10 @@ public class ServerKeyManager implements Runnable {
 	private HashMap<Integer, PublicKey> serverPublicKeys = new HashMap<Integer, PublicKey>();
 	private HashMap<Integer, Signature> serverSignatureEngines = new HashMap<Integer, Signature>();
 
+	private PublicKey prsPublicKey;
+	private Signature prsSignatureEngine;
+	
+	
 	private int serverId;
 	private Signature signatureEngine;
 	private PrivateKey privateKey;
@@ -52,6 +58,14 @@ public class ServerKeyManager implements Runnable {
 			signatureEngine = Signature.getInstance("SHA1withRSA");
 			signatureEngine.initSign(this.privateKey, new SecureRandom());
 
+			
+			//Initialize the PRS signatureEngine
+			this.prsPublicKey = KeyUtility.getPublicKey(Constants.CONFIG_DIR
+					+ "/" + Constants.PRS_PUBLIC_KEY_FILE + this.serverId);
+
+			prsSignatureEngine = Signature.getInstance("SHA1withRSA");
+			prsSignatureEngine.initVerify(this.prsPublicKey);
+			
 		} catch (NoSuchAlgorithmException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -168,6 +182,25 @@ public class ServerKeyManager implements Runnable {
 		}
 		return false;
 	}
+	
+	public boolean verifyPRSSignature(PRSMessage sm) {
+		
+
+		if (prsSignatureEngine == null) {
+			System.out.println("PRSSignEngine null");
+			return false;
+		} else {
+			try {
+				prsSignatureEngine.update(sm.getSerializedMessage());
+				return prsSignatureEngine.verify(sm.getSerializedMessageSignature());
+			} catch (SignatureException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+		}
+		return false;
+	}
 
 	public boolean verifyServerSignature(byte[] data, byte[] sig, int sId) {
 		Signature signEngine = serverSignatureEngines.get(sId);
@@ -186,6 +219,20 @@ public class ServerKeyManager implements Runnable {
 	}
 
 	public void signMessage(CODEXServerMessage csm) {
+		try {
+			// System.out.println(csm.getSerializedMessage());
+
+			signatureEngine.update(csm.getSerializedMessage());
+			csm.setSerializedMessageSignature(signatureEngine.sign());
+		} catch (SignatureException e) {
+			e.printStackTrace();
+
+		}
+		return;
+
+	}
+	
+	public void signMessage(PRSMessage csm) {
 		try {
 			// System.out.println(csm.getSerializedMessage());
 

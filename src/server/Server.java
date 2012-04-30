@@ -16,7 +16,13 @@ import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import proactive.messages.DumpStateResponseMessage;
+import proactive.messages.PRSMessage;
+import proactive.messages.PRSMessageType;
+
 import main.ConnectionInfo;
+import main.Constants;
+import main.FileOperations;
 import server.messages.BlindedReadResponse;
 import server.messages.CODEXServerMessage;
 import server.messages.CODEXServerMessageType;
@@ -38,6 +44,7 @@ import server.messages.UpdateRejectResponse;
 import server.messages.UpdateRequest;
 import server.messages.ClientUpdateRejectResponse;
 import server.messages.ClientUpdateAcceptResponse;
+import state.StateManager;
 import threshsig.SigShare;
 import utils.SerializationUtil;
 import utils.TimeUtility;
@@ -56,6 +63,8 @@ public class Server implements Runnable {
 	// public static String broadcastIP = "230.0.0.1";
 
 	public static int baseServerPort = 7000;
+
+	public static int prsPort = 6000;
 	public static int timeOutForAcceptanceMessages = 10000; // time in mSec
 
 	private int serverId;
@@ -70,15 +79,23 @@ public class Server implements Runnable {
 
 	// The thread listening to incoming messages on the broadcast channel
 	private Thread bclThread;
+	
+	private Thread prsThread;
 
-	// The db to store the shares -> in memory as of now
-	private final HashMap<String, SecretShare> shareDB;
+	private StateManager stateManager;
 
 	private Map<Integer, ConnectionInfo> serverConnectionInfo;
 
 	private DatagramSocket clientConnectionSocket;
 
+	private DatagramSocket prsConnectionSocket;
+
 	private DatagramSocket serverConnectionSocket;
+
+	/* This will be set by a PRS message */
+	private volatile boolean stopAcceptingNewClientMessages = false;
+
+	private volatile PRSMessage dumpMessage = null;
 
 	// ReentrantLock messageCacheLock = new ReentrantLock();
 	//
@@ -102,18 +119,24 @@ public class Server implements Runnable {
 		this.t = k - 1;
 		this.l = l;
 
-		this.quorumSize = 2 * t + 1;
+		this.quorumSize = 3 * t + 1;
 
 		this.serverId = serverId;
-		this.shareDB = new HashMap<String, SecretShare>();
+		
+		this.stateManager = new StateManager(serverId);
 
 		this.skm = new ServerKeyManager(clientIds, serverId, l);
 
 		this.stkm = new ServerThresholdKeyManager(serverId);
 
+		this.prsThread = new Thread(new PRSSocketListener());
+		prsThread.start();
+		
 		// INitialize and start the listener
 		this.bclThread = new Thread(new ServerSocketListener());
 		bclThread.start();
+		
+		
 
 		try {
 			this.clientConnectionSocket = new DatagramSocket(clientPort
@@ -143,7 +166,7 @@ public class Server implements Runnable {
 	@Override
 	public void run() {
 		// TODO Auto-generated method stub
-		byte[] receiveData = new byte[8192];
+		byte[] receiveData = new byte[16384];
 		TimeUtility tu = new TimeUtility();
 		println("Waiting for client messages on socket : "
 				+ clientConnectionSocket.getLocalPort());
@@ -160,21 +183,51 @@ public class Server implements Runnable {
 							+ ccm.getNonce());
 					handleClientMessage(ccm);
 				} else {
-					
-					this.clientConnectionSocket.receive(receivePacket);
-					tu.reset();
-					handlePacket(receivePacket);
-					System.out.println("Handled packet in " + tu.delta()
-							+ " ms");
+					if (!stopAcceptingNewClientMessages) {
+						this.clientConnectionSocket.receive(receivePacket);
+						tu.reset();
+						handlePacket(receivePacket);
+						System.out.println("Handled packet in " + tu.delta()
+								+ " ms");
+					} else {
+						// Have processed all pending client messages in queue
+						// Now time to dump state
+						println("Preparing to dump state");
+						// Send a reply back to the PRS
+						DumpStateResponseMessage dsrm = new DumpStateResponseMessage(
+								dumpMessage, stateManager.dumpServerState());
+
+						PRSMessage pmessage = new PRSMessage(
+								dumpMessage.getNonce(),
+								PRSMessageType.DUMP_STATE_RESPONSE,
+								SerializationUtil.serialize(dsrm));
+
+						skm.signMessage(pmessage);
+
+						byte[] data = SerializationUtil.serialize(pmessage);
+						this.prsConnectionSocket.send(new DatagramPacket(data,
+								data.length, dumpMessage.getAddress(),
+								dumpMessage.getPort()));
+
+						//this.bclThread.
+						break;
+					}
 				}
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
-				if(!(e instanceof SocketTimeoutException))
+				if (!(e instanceof SocketTimeoutException))
 					e.printStackTrace();
 			}
 		}
 
+		
+		println("Not accepting messages now");
 	}
+
+	/*
+	 * Function to dump server state
+	 */
+	
 
 	private void handlePacket(DatagramPacket receivePacket) {
 		CODEXClientMessage cm = (CODEXClientMessage) SerializationUtil
@@ -621,9 +674,9 @@ public class Server implements Runnable {
 		} else if (cm.getType().equals(
 				CODEXClientMessageType.CLIENT_UPDATE_REQUEST)) {
 
-			//Add the request to receivedMEssage history
+			// Add the request to receivedMEssage history
 			clientMessagesProcessed.add(cm.getNonce());
-			
+
 			// Write Protocol starts here
 			ClientUpdateRequest crw = (ClientUpdateRequest) SerializationUtil
 					.deserialize(cm.getSerializedMessage());
@@ -1098,7 +1151,7 @@ public class Server implements Runnable {
 
 			printState();
 
-			byte[] buf = new byte[16192];
+			byte[] buf = new byte[32768];
 			DatagramPacket packet = new DatagramPacket(buf, buf.length);
 
 			while (true) {
@@ -1152,8 +1205,8 @@ public class Server implements Runnable {
 							.deserialize(ccm.getSerializedMessage());
 
 					// Check if some value val(n) is locally bound to N
-					SecretShare ss = shareDB.get(crr.getDataId());
-
+					//SecretShare ss = shareDB.get(crr.getDataId());
+					SecretShare ss = stateManager.getSecretShare(crr.getDataId());
 					// If no value is bound, ignore the request
 					if (ss == null)
 						return;
@@ -1214,7 +1267,8 @@ public class Server implements Runnable {
 					BigInteger timestamp = null;
 
 					// Check if some value is locally bound to N
-					SecretShare ss = shareDB.get(ctr.getDataId());
+					//SecretShare ss = shareDB.get(ctr.getDataId());
+					SecretShare ss = stateManager.getSecretShare(ctr.getDataId());
 
 					// If no value is bound, then send back a one timestamp
 					if (ss == null)
@@ -1572,8 +1626,8 @@ public class Server implements Runnable {
 				// Add the client message to the clientMessages queue
 				// Become the delegate for this client Message if not already
 				// processed
-				
-				if(sm.getSenderId() != getServerId())
+
+				if (sm.getSenderId() != getServerId())
 					addClientMessage(ur.getCcm());
 
 				ClientUpdateRequest cwr = (ClientUpdateRequest) SerializationUtil
@@ -1602,7 +1656,8 @@ public class Server implements Runnable {
 				// Verify the evidence Set
 				// Do this later
 
-				BigInteger dbTS = getTimestampFromDB(cwr.getDataId());
+//				BigInteger dbTS = getTimestampFromDB(cwr.getDataId());
+				BigInteger dbTS = stateManager.getTimestampFromDB(cwr.getDataId());
 				if (dbTS.compareTo(correctTimeStamp) == -1) {
 					// Local TS < Update TS
 					// Update the share and send back an update_accept message
@@ -1610,8 +1665,9 @@ public class Server implements Runnable {
 					println("Updating dataId " + cwr.getDataId()
 							+ " with timestamp " + correctTimeStamp
 							+ " and secret " + cwr.getEncryptedSecret());
-					shareDB.put(cwr.getDataId(), new SecretShare(
-							correctTimeStamp, cwr.getEncryptedSecret()));
+//					shareDB.put(cwr.getDataId(), new SecretShare(
+//							correctTimeStamp, cwr.getEncryptedSecret()));
+					stateManager.update(cwr.getDataId(), new SecretShare(correctTimeStamp, cwr.getEncryptedSecret()));
 
 					UpdateAcceptResponse uar = new UpdateAcceptResponse(
 							ur.getCcm(), sm.getSenderId());
@@ -1646,7 +1702,7 @@ public class Server implements Runnable {
 		}
 
 		private void addClientMessage(CODEXClientMessage ccm) {
-			
+
 			if (!clientMessagesProcessed.contains(ccm.getNonce())) {
 				if (!clientMessages.contains(ccm)) {
 					clientMessages.offer(ccm);
@@ -1662,6 +1718,69 @@ public class Server implements Runnable {
 		}
 	}
 
+	private class PRSSocketListener implements Runnable {
+
+		@Override
+		public void run() {
+			// TODO Auto-generated method stub
+			println("Running PRS server thread for server " + getServerId());
+			try {
+				prsConnectionSocket = new DatagramSocket(prsPort
+						+ getServerId());
+				// address = InetAddress.getByName(ReplicaServer.broadcastIP);
+				// socket.joinGroup(address);
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+			printState();
+
+			byte[] buf = new byte[16192];
+			DatagramPacket packet = new DatagramPacket(buf, buf.length);
+
+			while (true) {
+
+				try {
+					println("Waiting for server messages on socket : "
+							+ prsConnectionSocket.getLocalPort());
+					prsConnectionSocket.receive(packet);
+
+					handlePRSPacket(packet);
+
+					// printState();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+
+		}
+
+		private void handlePRSPacket(DatagramPacket receivePacket) {
+			PRSMessage sm = (PRSMessage) SerializationUtil
+					.deserialize(receivePacket.getData());
+
+			println("Received " + sm.getType() + " from PRS " + " with nonce "
+					+ sm.getNonce());
+
+			// Verify the server signature and return if not valid
+			if (!skm.verifyPRSSignature(sm)) {
+				System.out.println("Cannot verify signature from PRS message");
+				return;
+			}
+
+			if (sm.getType().equals(PRSMessageType.DUMP_STATE)) {
+				println("Setting dump variable");
+				sm.setAddress(receivePacket.getAddress());
+				sm.setPort(receivePacket.getPort());
+				dumpMessage = sm;
+				stopAcceptingNewClientMessages = true;
+
+			}
+		}
+	}
+
 	public void printState() {
 		println("Current state of server " + getServerId() + " :");
 		// for (Long s : messageCache.keySet()) {
@@ -1672,9 +1791,10 @@ public class Server implements Runnable {
 		// System.out.println();
 		// }
 
-		for (String s : shareDB.keySet()) {
-			System.out.println(s + " : " + shareDB.get(s));
-		}
+//		for (String s : shareDB.keySet()) {
+//			System.out.println(s + " : " + shareDB.get(s));
+//		}
+		this.stateManager.printState();
 	}
 
 	public int getServerId() {
@@ -1686,7 +1806,7 @@ public class Server implements Runnable {
 	}
 
 	public void addSecret(String id, SecretShare ss) {
-		this.shareDB.put(id, ss);
+		this.stateManager.update(id, ss);
 		printState();
 	}
 
@@ -1698,11 +1818,5 @@ public class Server implements Runnable {
 		return csm1.getNonce() == csm2.getNonce();
 	}
 
-	public BigInteger getTimestampFromDB(String dataId) {
-		SecretShare ss = shareDB.get(dataId);
-		if (ss == null) {
-			return BigInteger.ONE;
-		} else
-			return ss.getTimestamp();
-	}
+	
 }

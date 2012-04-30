@@ -1,8 +1,13 @@
 package server;
 
+import java.io.Serializable;
 import java.math.BigInteger;
 
-public class SecretShare {
+public class SecretShare implements Serializable{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 5303019265149257240L;
 	private BigInteger timestamp;
 	private BigInteger secret;
 

@@ -51,11 +51,12 @@ public class KeyGenerator {
 
 				// Write private key to config file
 				PrivateKey privateKey = kp.getPrivate();
-				
+
 				PKCS8EncodedKeySpec pkcs8EncodedKeySpec = new PKCS8EncodedKeySpec(
 						privateKey.getEncoded());
-//				String privateKeyStr = new String(Base64Coder.encode(privateKey
-//						.getEncoded()));
+				// String privateKeyStr = new
+				// String(Base64Coder.encode(privateKey
+				// .getEncoded()));
 				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
 						+ Constants.CLIENT_PRIVATE_KEY_FILE + clientId,
 						pkcs8EncodedKeySpec.getEncoded(), false);
@@ -64,8 +65,8 @@ public class KeyGenerator {
 				PublicKey publicKey = kp.getPublic();
 				X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(
 						publicKey.getEncoded());
-//				String publicKeyStr = new String(Base64Coder.encode(publicKey
-//						.getEncoded()));
+				// String publicKeyStr = new String(Base64Coder.encode(publicKey
+				// .getEncoded()));
 				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
 						+ Constants.CLIENT_PUBLIC_KEY_FILE + clientId,
 						x509EncodedKeySpec.getEncoded(), false);
@@ -89,8 +90,9 @@ public class KeyGenerator {
 				PrivateKey privateKey = kp.getPrivate();
 				PKCS8EncodedKeySpec pkcs8EncodedKeySpec = new PKCS8EncodedKeySpec(
 						privateKey.getEncoded());
-//				String privateKeyStr = new String(Base64Coder.encode(privateKey
-//						.getEncoded()));
+				// String privateKeyStr = new
+				// String(Base64Coder.encode(privateKey
+				// .getEncoded()));
 				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
 						+ Constants.SERVER_PRIVATE_KEY_FILE + serverId,
 						pkcs8EncodedKeySpec.getEncoded(), false);
@@ -99,8 +101,8 @@ public class KeyGenerator {
 				PublicKey publicKey = kp.getPublic();
 				X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(
 						publicKey.getEncoded());
-//				String publicKeyStr = new String(Base64Coder.encode(publicKey
-//						.getEncoded()));
+				// String publicKeyStr = new String(Base64Coder.encode(publicKey
+				// .getEncoded()));
 				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
 						+ Constants.SERVER_PUBLIC_KEY_FILE + serverId,
 						x509EncodedKeySpec.getEncoded(), false);
@@ -110,6 +112,40 @@ public class KeyGenerator {
 				e.printStackTrace();
 			}
 
+		}
+
+		// Generate public-private key pair for Proactive Recovery Subsystem
+		for (Integer serverId : serverIds) {
+			try {
+				KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+				keyGen.initialize(keySize, new SecureRandom());
+				KeyPair kp = keyGen.generateKeyPair();
+
+				// Write private key to config file
+				PrivateKey privateKey = kp.getPrivate();
+				PKCS8EncodedKeySpec pkcs8EncodedKeySpec = new PKCS8EncodedKeySpec(
+						privateKey.getEncoded());
+				// String privateKeyStr = new
+				// String(Base64Coder.encode(privateKey
+				// .getEncoded()));
+				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
+						+ Constants.PRS_PRIVATE_KEY_FILE + serverId,
+						pkcs8EncodedKeySpec.getEncoded(), false);
+
+				// Write public key to config file
+				PublicKey publicKey = kp.getPublic();
+				X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(
+						publicKey.getEncoded());
+				// String publicKeyStr = new String(Base64Coder.encode(publicKey
+				// .getEncoded()));
+				FileOperations.writeToFile(Constants.CONFIG_DIR + "/"
+						+ Constants.PRS_PUBLIC_KEY_FILE + serverId,
+						x509EncodedKeySpec.getEncoded(), false);
+
+			} catch (NoSuchAlgorithmException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
 		}
 
 	}

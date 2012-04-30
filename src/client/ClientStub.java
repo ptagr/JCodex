@@ -357,6 +357,8 @@ public class ClientStub {
 
 		CODEXClientMessage ccm1 = getTimeStampMessage(dataId);
 		
+		if(ccm1 == null)
+			return false;
 		try {
 			Thread.sleep(sleep);
 		} catch (InterruptedException e1) {
@@ -498,18 +500,7 @@ public class ClientStub {
 
 	public byte[] signMessage(byte[] data) {
 		try {
-			// MessageDigest md = MessageDigest.getInstance("SHA1");
-			//
-			// // 3. Create a Message Digest of the Data to be transmitted
-			// md.update(data);
-			// byte byteMDofDataToTransmit[] = md.digest();
-			//
-			// String strMDofDataToTransmit = new String();
-			// for (int i = 0; i < byteMDofDataToTransmit.length; i++) {
-			// strMDofDataToTransmit = strMDofDataToTransmit
-			// + Integer
-			// .toHexString((int) byteMDofDataToTransmit[i] & 0xFF);
-			// }
+			
 
 			signatureEngine.update(data);
 			return signatureEngine.sign();
