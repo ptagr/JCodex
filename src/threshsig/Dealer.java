@@ -29,6 +29,9 @@ public class Dealer implements Serializable{
 	/** Group Key */
 	private GroupKey gk;
 
+	/** PRS Group Key */
+	private PRSGroupKey prsgk;
+	
 	/** Indicates whether this dealer has initialized a set of keys */
 	private boolean keyInit;
 
@@ -123,13 +126,16 @@ public class Dealer implements Serializable{
 
 		// Create a group key
 		this.gk = new GroupKey(k, l, keysize, e, n);
+		
+		this.prsgk = new PRSGroupKey(k, l, keysize, e, n, m);
+		
 
 		// Create Secret KeyShares and KeyShare Verifiers
 		// Note: We don't use the private exponent 'd' after this
 		shares = this.generateKeyShares(d, m, k, l, n);
 
 		// Create verification shares and update group key with the verifiers
-		this.generateVerifiers(shares, gk);
+		this.prsgk.setV(this.generateVerifiers(shares, gk));
 		
 		//Initialize each share with group key
 		for (KeyShare ks : shares) {
@@ -147,6 +153,14 @@ public class Dealer implements Serializable{
 	public GroupKey getGroupKey() throws ThresholdSigException {
 		checkKeyInit();
 		return this.gk;
+	}
+	
+	/**
+	 * Returns the PRS group key
+	 */
+	public PRSGroupKey getPRSGroupKey() throws ThresholdSigException {
+		checkKeyInit();
+		return this.prsgk;
 	}
 
 	/**
@@ -230,7 +244,7 @@ public class Dealer implements Serializable{
 	 */
 	// TODO: Merge Dealer.generateShares and Dealer.generateVerifiers
 	// and generate them simultaneously
-	private void generateVerifiers(
+	private BigInteger generateVerifiers(
 			final KeyShare[] secrets, final GroupKey gk) {
 
 		debug("Generating Verifiers");
@@ -276,7 +290,7 @@ public class Dealer implements Serializable{
 		gk.setV(rand);
 		gk.setVi(v);
 
-		//return rand;
+		return rand;
 	}
 
 	/**

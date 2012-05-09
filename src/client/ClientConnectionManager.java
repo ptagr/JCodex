@@ -53,7 +53,7 @@ public class ClientConnectionManager {
 	//
 	// }
 
-	public void sendMessage(byte[] data) {
+	public void sendMessage(byte[] data, long nonce) {
 
 		// Select a delegate at random
 		int delegateId = new Random().nextInt(l);
@@ -67,7 +67,7 @@ public class ClientConnectionManager {
 		try {
 
 			System.out.println("Sending a message to server " + delegateId
-					+ " on port " + ci.getPort());
+					+ " on port " + ci.getPort() + " with nonce "+ nonce);
 			// Send the datagram packet through the client socket
 			this.clientSocket.send(dp);
 

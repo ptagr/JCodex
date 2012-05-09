@@ -6,6 +6,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.util.HashSet;
+import java.util.Set;
 
 import main.Constants;
 
@@ -23,21 +25,56 @@ public class KeyGenerator {
 	public static void main(String[] args) throws FileNotFoundException,
 			IOException {
 		testInitDealer(1024, 5, 2);
-		ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(
-				Constants.THRESHOLD_CONFIG_DIR + "/"
-						+ Constants.THRESHOLD_GROUP_KEY_FILE));
-		oos.writeObject(d.getGroupKey());
-		oos.flush();
-		oos.close();
-		KeyShare[] keys = d.getShares();
 
-		for (int i = 0; i < keys.length; i++) {
-			oos = new ObjectOutputStream(new FileOutputStream(
-					Constants.THRESHOLD_CONFIG_DIR + "/"
-							+ Constants.THRESHOLD_KEY_SHARE_FILE + i));
-			oos.writeObject(keys[i]);
+		Set<Integer> serverIds = new HashSet<Integer>();
+		for (int i = 0; i < 5; i++)
+			serverIds.add(i);
+		
+		Set<Integer> clientIds = new HashSet<Integer>();
+		for (int i = 0; i < 2; i++)
+			clientIds.add(i);
+		for(Integer c : clientIds){
+			ObjectOutputStream oos = new ObjectOutputStream(
+					new FileOutputStream(Constants.CLIENT_CONFIG_DIR +c+ "/"
+							+ Constants.THRESHOLD_GROUP_KEY_FILE));
+			oos.writeObject(d.getGroupKey());
 			oos.flush();
 			oos.close();
+		}
+		
+		
+		for (Integer s : serverIds) {
+			ObjectOutputStream oos = new ObjectOutputStream(
+					new FileOutputStream(Constants.THRESHOLD_CONFIG_DIR +s+ "/"
+							+ Constants.THRESHOLD_GROUP_KEY_FILE));
+			oos.writeObject(d.getGroupKey());
+			oos.flush();
+			oos.close();
+
+			oos = new ObjectOutputStream(new FileOutputStream(
+					Constants.THRESHOLD_PRS_CONFIG_DIR + s + "/"
+							+ Constants.THRESHOLD_PRS_GROUP_KEY_FILE));
+			oos.writeObject(d.getPRSGroupKey());
+			oos.flush();
+			oos.close();
+
+			KeyShare[] keys = d.getShares();
+
+			//for (int i = 0; i < keys.length; i++) {
+				oos = new ObjectOutputStream(new FileOutputStream(
+						Constants.THRESHOLD_CONFIG_DIR + s+"/"
+								+ Constants.THRESHOLD_KEY_SHARE_FILE + s));
+				oos.writeObject(keys[s]);
+				oos.flush();
+				oos.close();
+
+				oos = new ObjectOutputStream(new FileOutputStream(
+						Constants.THRESHOLD_PRS_CONFIG_DIR + s+ "/"
+								+ Constants.THRESHOLD_KEY_SHARE_FILE + s));
+				oos.writeObject(keys[s]);
+				oos.flush();
+				oos.close();
+			//}
 		}
 	}
 
@@ -65,36 +102,36 @@ public class KeyGenerator {
 		// keys = d.getShares();
 	}
 
-//	@Test
-//	public void testSerialization() {
-//		try {
-//
-//			// Make everythg null
-//			d = null;
-//			keys = null;
-//			gk = null;
-//
-//			ObjectInputStream ois = new ObjectInputStream(new FileInputStream(
-//					"config/groupkey"));
-//			gk = (GroupKey) ois.readObject();
-//
-//			ois.close();
-//
-//			keys = new KeyShare[gk.getL()];
-//			for (int i = 0; i < keys.length; i++) {
-//				ois = new ObjectInputStream(new FileInputStream(
-//						"config/keyshare" + i));
-//				keys[i] = (KeyShare) ois.readObject();
-//				ois.close();
-//			}
-//
-//			for (int i = 0; i < keys.length; i++) {
-//				keys[i].postSecretGeneration(gk);
-//			}
-//
-//		} catch (Exception e) {
-//			e.printStackTrace();
-//		}
-//	}
+	// @Test
+	// public void testSerialization() {
+	// try {
+	//
+	// // Make everythg null
+	// d = null;
+	// keys = null;
+	// gk = null;
+	//
+	// ObjectInputStream ois = new ObjectInputStream(new FileInputStream(
+	// "config/groupkey"));
+	// gk = (GroupKey) ois.readObject();
+	//
+	// ois.close();
+	//
+	// keys = new KeyShare[gk.getL()];
+	// for (int i = 0; i < keys.length; i++) {
+	// ois = new ObjectInputStream(new FileInputStream(
+	// "config/keyshare" + i));
+	// keys[i] = (KeyShare) ois.readObject();
+	// ois.close();
+	// }
+	//
+	// for (int i = 0; i < keys.length; i++) {
+	// keys[i].postSecretGeneration(gk);
+	// }
+	//
+	// } catch (Exception e) {
+	// e.printStackTrace();
+	// }
+	// }
 
 }

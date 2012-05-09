@@ -14,28 +14,28 @@ public class TimeStampResponse extends InternalServerMessage implements Serializ
 
 	private CODEXClientMessage ccm;;
 		
-	private BigInteger timeStamp;
+	private Integer timeStamp;
 
 	public TimeStampResponse(CODEXClientMessage ccm,
-			BigInteger timestamp) {
+			Integer timestamp) {
 		super();
 		this.setCcm(ccm);
 		this.setTimeStamp(timestamp);
 	}
 
 	public TimeStampResponse(CODEXClientMessage ccm,
-			BigInteger timestamp, int destId) {
+			Integer timestamp, int destId) {
 		super(destId);
 		this.setCcm(ccm);
 		this.setTimeStamp(timestamp);
 	}
 	
 
-	public BigInteger getTimeStamp() {
+	public Integer getTimeStamp() {
 		return timeStamp;
 	}
 
-	public void setTimeStamp(BigInteger timeStamp) {
+	public void setTimeStamp(Integer timeStamp) {
 		this.timeStamp = timeStamp;
 	}
 

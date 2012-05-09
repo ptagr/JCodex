@@ -16,36 +16,34 @@ import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import main.ConnectionInfo;
 import proactive.messages.DumpStateResponseMessage;
 import proactive.messages.PRSMessage;
 import proactive.messages.PRSMessageType;
-
-import main.ConnectionInfo;
-import main.Constants;
-import main.FileOperations;
 import server.messages.BlindedReadResponse;
 import server.messages.CODEXServerMessage;
 import server.messages.CODEXServerMessageType;
+import server.messages.ClientUpdateAcceptResponse;
+import server.messages.ClientUpdateRejectResponse;
 import server.messages.ForwardReadRequestAccept;
 import server.messages.InternalServerMessage;
 import server.messages.SignReadResponseRequest;
 import server.messages.SignTimeStampResponseRequest;
-import server.messages.SignUpdateRejectReponse;
 import server.messages.SignUpdateAcceptResponse;
+import server.messages.SignUpdateRejectReponse;
 import server.messages.SignedReadResponse;
 import server.messages.SignedTimeStampResponse;
-import server.messages.SignedUpdateRejectResponse;
 import server.messages.SignedUpdateAcceptResponse;
+import server.messages.SignedUpdateRejectResponse;
 import server.messages.TimeStampReadResponse;
 import server.messages.TimeStampRequest;
 import server.messages.TimeStampResponse;
 import server.messages.UpdateAcceptResponse;
 import server.messages.UpdateRejectResponse;
 import server.messages.UpdateRequest;
-import server.messages.ClientUpdateRejectResponse;
-import server.messages.ClientUpdateAcceptResponse;
 import state.StateManager;
 import threshsig.SigShare;
+import utils.InterruptableUDPThread;
 import utils.SerializationUtil;
 import utils.TimeUtility;
 import client.messages.CODEXClientMessage;
@@ -79,7 +77,7 @@ public class Server implements Runnable {
 
 	// The thread listening to incoming messages on the broadcast channel
 	private Thread bclThread;
-	
+
 	private Thread prsThread;
 
 	private StateManager stateManager;
@@ -96,6 +94,8 @@ public class Server implements Runnable {
 	private volatile boolean stopAcceptingNewClientMessages = false;
 
 	private volatile PRSMessage dumpMessage = null;
+
+	private volatile boolean stopServer = false;
 
 	// ReentrantLock messageCacheLock = new ReentrantLock();
 	//
@@ -122,26 +122,25 @@ public class Server implements Runnable {
 		this.quorumSize = 3 * t + 1;
 
 		this.serverId = serverId;
-		
+
 		this.stateManager = new StateManager(serverId);
 
 		this.skm = new ServerKeyManager(clientIds, serverId, l);
 
 		this.stkm = new ServerThresholdKeyManager(serverId);
 
-		this.prsThread = new Thread(new PRSSocketListener());
-		prsThread.start();
-		
-		// INitialize and start the listener
-		this.bclThread = new Thread(new ServerSocketListener());
-		bclThread.start();
-		
-		
+		// this.prsThread = new Thread(new PRSSocketListener());
 
 		try {
 			this.clientConnectionSocket = new DatagramSocket(clientPort
 					+ serverId);
 			this.clientConnectionSocket.setSoTimeout(1000);
+
+			this.prsConnectionSocket = new DatagramSocket(prsPort
+					+ getServerId());
+
+			this.serverConnectionSocket = new DatagramSocket(baseServerPort
+					+ getServerId());
 			// this.serverSocket.setSoTimeout(TimeUtility.timeOut);
 		} catch (SocketException e) {
 
@@ -151,6 +150,17 @@ public class Server implements Runnable {
 
 			e.printStackTrace();
 		}
+
+		this.prsThread = new InterruptableUDPThread(new PRSSocketListener(),
+				prsConnectionSocket);
+
+		this.prsThread.start();
+
+		// INitialize and start the listener
+		// this.bclThread = new Thread(new ServerSocketListener());
+		this.bclThread = new InterruptableUDPThread(new ServerSocketListener(),
+				serverConnectionSocket);
+		this.bclThread.start();
 
 		serverConnectionInfo = new HashMap<Integer, ConnectionInfo>();
 
@@ -163,6 +173,12 @@ public class Server implements Runnable {
 		}
 	}
 
+	public Server(int k, int l, int clientPort, int serverId,
+			Set<Integer> clientIds, HashMap<String, SecretShare> state) {
+		this(k, l, clientPort, serverId, clientIds);
+		this.stateManager = new StateManager(serverId, state);
+	}
+
 	@Override
 	public void run() {
 		// TODO Auto-generated method stub
@@ -171,6 +187,7 @@ public class Server implements Runnable {
 		println("Waiting for client messages on socket : "
 				+ clientConnectionSocket.getLocalPort());
 		while (true) {
+			printState();
 			DatagramPacket receivePacket = new DatagramPacket(receiveData,
 					receiveData.length);
 			try {
@@ -195,7 +212,8 @@ public class Server implements Runnable {
 						println("Preparing to dump state");
 						// Send a reply back to the PRS
 						DumpStateResponseMessage dsrm = new DumpStateResponseMessage(
-								dumpMessage, stateManager.dumpServerState());
+								dumpMessage, stateManager.dumpServerState(),
+								stateManager.getShareDB());
 
 						PRSMessage pmessage = new PRSMessage(
 								dumpMessage.getNonce(),
@@ -209,7 +227,7 @@ public class Server implements Runnable {
 								data.length, dumpMessage.getAddress(),
 								dumpMessage.getPort()));
 
-						//this.bclThread.
+						// this.bclThread.
 						break;
 					}
 				}
@@ -220,14 +238,16 @@ public class Server implements Runnable {
 			}
 		}
 
-		
 		println("Not accepting messages now");
+		stopServer = true;
+		this.clientConnectionSocket.close();
+		this.prsThread.interrupt();
+		this.bclThread.interrupt();
 	}
 
 	/*
 	 * Function to dump server state
 	 */
-	
 
 	private void handlePacket(DatagramPacket receivePacket) {
 		CODEXClientMessage cm = (CODEXClientMessage) SerializationUtil
@@ -271,7 +291,7 @@ public class Server implements Runnable {
 			// quorum
 			// of servers
 			// Now wait for a quorum number of messages
-			HashMap<BigInteger, Set<CODEXServerMessage>> evidenceMap = new HashMap<BigInteger, Set<CODEXServerMessage>>();
+			HashMap<Integer, Set<CODEXServerMessage>> evidenceMap = new HashMap<Integer, Set<CODEXServerMessage>>();
 			// /Set<CODEXServerMessage> rejectSet = new
 			// HashSet<CODEXServerMessage>();
 			tu.reset();
@@ -326,13 +346,12 @@ public class Server implements Runnable {
 			// with servers with old state to send the old timestamp
 			// To break the tie, select the set with higher TimeStamp
 			Set<CODEXServerMessage> evidenceSetTS = null;
-			BigInteger correctTimeStamp = null;
-			for (BigInteger key : evidenceMap.keySet()) {
+			Integer correctTimeStamp = null;
+			for (Integer key : evidenceMap.keySet()) {
 				Set<CODEXServerMessage> tsSet = evidenceMap.get(key);
 				if (tsSet.size() >= t + 1) {
 					if (evidenceSetTS == null
-							|| (correctTimeStamp != null && key
-									.compareTo(correctTimeStamp) == 1)) {
+							|| (correctTimeStamp != null && key > correctTimeStamp)) {
 						evidenceSetTS = tsSet;
 						correctTimeStamp = key;
 					}
@@ -530,13 +549,12 @@ public class Server implements Runnable {
 			// To break the tie, select the set with higher TimeStamp
 			Set<ForwardReadRequestAccept> evidenceSet = null;
 			BigInteger correctCipher = null;
-			BigInteger correctTimeStamp = null;
+			Integer correctTimeStamp = null;
 			for (SecretShare key : evidenceMap.keySet()) {
 				Set<ForwardReadRequestAccept> frraSet = evidenceMap.get(key);
 				if (frraSet.size() >= t + 1) {
 					if (evidenceSet == null
-							|| (correctTimeStamp != null && key.getTimestamp()
-									.compareTo(correctTimeStamp) == 1)) {
+							|| (correctTimeStamp != null && key.getTimestamp() > correctTimeStamp)) {
 						evidenceSet = frraSet;
 						correctCipher = key.getSecret();
 						correctTimeStamp = key.getTimestamp();
@@ -1139,22 +1157,13 @@ public class Server implements Runnable {
 		public void run() {
 			// TODO Auto-generated method stub
 			println("Running server thread for server " + getServerId());
-			try {
-				serverConnectionSocket = new DatagramSocket(baseServerPort
-						+ getServerId());
-				// address = InetAddress.getByName(ReplicaServer.broadcastIP);
-				// socket.joinGroup(address);
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
 
 			printState();
 
 			byte[] buf = new byte[32768];
 			DatagramPacket packet = new DatagramPacket(buf, buf.length);
 
-			while (true) {
+			while (true && !stopServer) {
 
 				try {
 					println("Waiting for server messages on socket : "
@@ -1164,6 +1173,8 @@ public class Server implements Runnable {
 					handleServerPacket(packet);
 
 					// printState();
+				} catch (SocketException se) {
+					break;
 				} catch (IOException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -1205,8 +1216,9 @@ public class Server implements Runnable {
 							.deserialize(ccm.getSerializedMessage());
 
 					// Check if some value val(n) is locally bound to N
-					//SecretShare ss = shareDB.get(crr.getDataId());
-					SecretShare ss = stateManager.getSecretShare(crr.getDataId());
+					// SecretShare ss = shareDB.get(crr.getDataId());
+					SecretShare ss = stateManager.getSecretShare(crr
+							.getDataId());
 					// If no value is bound, ignore the request
 					if (ss == null)
 						return;
@@ -1264,15 +1276,16 @@ public class Server implements Runnable {
 					ClientTimeStampRequest ctr = (ClientTimeStampRequest) SerializationUtil
 							.deserialize(ccm.getSerializedMessage());
 
-					BigInteger timestamp = null;
+					Integer timestamp = null;
 
 					// Check if some value is locally bound to N
-					//SecretShare ss = shareDB.get(ctr.getDataId());
-					SecretShare ss = stateManager.getSecretShare(ctr.getDataId());
+					// SecretShare ss = shareDB.get(ctr.getDataId());
+					SecretShare ss = stateManager.getSecretShare(ctr
+							.getDataId());
 
 					// If no value is bound, then send back a one timestamp
 					if (ss == null)
-						timestamp = BigInteger.ONE;
+						timestamp = 1;
 					else {
 						timestamp = ss.getTimestamp();
 					}
@@ -1650,24 +1663,24 @@ public class Server implements Runnable {
 
 				TimeStampReadResponse trr = (TimeStampReadResponse) SerializationUtil
 						.deserialize(ccm.getSerializedMessage());
-				BigInteger correctTimeStamp = trr.getTimestamp().add(
-						BigInteger.ONE);
+				Integer correctTimeStamp = trr.getTimestamp() + 1;
 
 				// Verify the evidence Set
 				// Do this later
 
-//				BigInteger dbTS = getTimestampFromDB(cwr.getDataId());
-				BigInteger dbTS = stateManager.getTimestampFromDB(cwr.getDataId());
-				if (dbTS.compareTo(correctTimeStamp) == -1) {
+				// BigInteger dbTS = getTimestampFromDB(cwr.getDataId());
+				Integer dbTS = stateManager.getTimestampFromDB(cwr.getDataId());
+				if (dbTS < correctTimeStamp) {
 					// Local TS < Update TS
 					// Update the share and send back an update_accept message
 					// ?? Locally bind E(s) to name N ??
 					println("Updating dataId " + cwr.getDataId()
 							+ " with timestamp " + correctTimeStamp
 							+ " and secret " + cwr.getEncryptedSecret());
-//					shareDB.put(cwr.getDataId(), new SecretShare(
-//							correctTimeStamp, cwr.getEncryptedSecret()));
-					stateManager.update(cwr.getDataId(), new SecretShare(correctTimeStamp, cwr.getEncryptedSecret()));
+					// shareDB.put(cwr.getDataId(), new SecretShare(
+					// correctTimeStamp, cwr.getEncryptedSecret()));
+					stateManager.update(cwr.getDataId(), new SecretShare(
+							correctTimeStamp, cwr.getEncryptedSecret()));
 
 					UpdateAcceptResponse uar = new UpdateAcceptResponse(
 							ur.getCcm(), sm.getSenderId());
@@ -1724,31 +1737,24 @@ public class Server implements Runnable {
 		public void run() {
 			// TODO Auto-generated method stub
 			println("Running PRS server thread for server " + getServerId());
-			try {
-				prsConnectionSocket = new DatagramSocket(prsPort
-						+ getServerId());
-				// address = InetAddress.getByName(ReplicaServer.broadcastIP);
-				// socket.joinGroup(address);
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
 
 			printState();
 
 			byte[] buf = new byte[16192];
 			DatagramPacket packet = new DatagramPacket(buf, buf.length);
 
-			while (true) {
+			while (true && !stopServer) {
 
 				try {
-					println("Waiting for server messages on socket : "
+					println("Waiting for PRS Server messages on socket : "
 							+ prsConnectionSocket.getLocalPort());
 					prsConnectionSocket.receive(packet);
 
 					handlePRSPacket(packet);
 
 					// printState();
+				} catch (SocketException se) {
+					break;
 				} catch (IOException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -1791,9 +1797,9 @@ public class Server implements Runnable {
 		// System.out.println();
 		// }
 
-//		for (String s : shareDB.keySet()) {
-//			System.out.println(s + " : " + shareDB.get(s));
-//		}
+		// for (String s : shareDB.keySet()) {
+		// System.out.println(s + " : " + shareDB.get(s));
+		// }
 		this.stateManager.printState();
 	}
 
@@ -1818,5 +1824,4 @@ public class Server implements Runnable {
 		return csm1.getNonce() == csm2.getNonce();
 	}
 
-	
 }

@@ -52,7 +52,7 @@ public class ServerKeyManager implements Runnable {
 
 		try {
 
-			this.privateKey = KeyUtility.getPrivateKey(Constants.CONFIG_DIR
+			this.privateKey = KeyUtility.getPrivateKey(Constants.CONFIG_DIR+ serverId 
 					+ "/" + Constants.SERVER_PRIVATE_KEY_FILE + this.serverId);
 
 			signatureEngine = Signature.getInstance("SHA1withRSA");
@@ -60,7 +60,7 @@ public class ServerKeyManager implements Runnable {
 
 			
 			//Initialize the PRS signatureEngine
-			this.prsPublicKey = KeyUtility.getPublicKey(Constants.CONFIG_DIR
+			this.prsPublicKey = KeyUtility.getPublicKey(Constants.CONFIG_DIR+ serverId 
 					+ "/" + Constants.PRS_PUBLIC_KEY_FILE + this.serverId);
 
 			prsSignatureEngine = Signature.getInstance("SHA1withRSA");
@@ -86,7 +86,7 @@ public class ServerKeyManager implements Runnable {
 			try {
 
 				PublicKey publicKey = KeyUtility
-						.getPublicKey(Constants.CONFIG_DIR + "/"
+						.getPublicKey(Constants.CONFIG_DIR+ serverId  + "/"
 								+ Constants.CLIENT_PUBLIC_KEY_FILE + clientId);
 
 				clientPublicKeys.put(clientId, publicKey);
@@ -109,7 +109,7 @@ public class ServerKeyManager implements Runnable {
 		for (Integer serverId : serverIds) {
 			try {
 				PublicKey publicKey = KeyUtility
-						.getPublicKey(Constants.CONFIG_DIR + "/"
+						.getPublicKey(Constants.CONFIG_DIR + serverId + "/"
 								+ Constants.SERVER_PUBLIC_KEY_FILE + serverId);
 
 				serverPublicKeys.put(serverId, publicKey);

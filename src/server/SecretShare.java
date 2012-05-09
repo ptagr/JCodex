@@ -3,15 +3,15 @@ package server;
 import java.io.Serializable;
 import java.math.BigInteger;
 
-public class SecretShare implements Serializable{
+public class SecretShare implements Serializable {
 	/**
 	 * 
 	 */
-	private static final long serialVersionUID = 5303019265149257240L;
-	private BigInteger timestamp;
+	private static final long serialVersionUID = 2173734404095613467L;
+	private Integer timestamp;
 	private BigInteger secret;
 
-	public SecretShare(BigInteger timestamp, BigInteger secret) {
+	public SecretShare(Integer timestamp, BigInteger secret) {
 		super();
 		this.timestamp = timestamp;
 		this.secret = secret;
@@ -25,11 +25,11 @@ public class SecretShare implements Serializable{
 		this.secret = secret;
 	}
 
-	public BigInteger getTimestamp() {
+	public Integer getTimestamp() {
 		return timestamp;
 	}
 
-	public void setTimestamp(BigInteger timestamp) {
+	public void setTimestamp(Integer timestamp) {
 		this.timestamp = timestamp;
 	}
 

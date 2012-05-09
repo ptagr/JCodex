@@ -32,7 +32,7 @@ public class ServerThresholdKeyManager {
 		ObjectInputStream ois;
 		try {
 			ois = new ObjectInputStream(new FileInputStream(
-					Constants.THRESHOLD_CONFIG_DIR + "/"
+					Constants.THRESHOLD_CONFIG_DIR + serverId+ "/"
 							+ Constants.THRESHOLD_GROUP_KEY_FILE));
 
 			gk = (GroupKey) ois.readObject();
@@ -40,7 +40,7 @@ public class ServerThresholdKeyManager {
 			ois.close();
 
 			ois = new ObjectInputStream(new FileInputStream(
-					Constants.THRESHOLD_CONFIG_DIR + "/"
+					Constants.THRESHOLD_CONFIG_DIR + serverId+"/"
 							+ Constants.THRESHOLD_KEY_SHARE_FILE + serverId));
 			keyshare = (KeyShare) ois.readObject();
 			ois.close();

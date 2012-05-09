@@ -1,45 +1,26 @@
 package test;
 
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.math.BigInteger;
-import java.security.KeyFactory;
-import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.SecureRandom;
 import java.security.Signature;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Random;
 
 import junit.framework.Assert;
+import main.Constants;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import utils.KeyUtility;
 import client.ClientStub;
 import client.messages.CODEXClientMessage;
 import client.messages.CODEXClientMessageType;
-import client.messages.ClientReadRequest;
-
-import threshsig.Base64Coder;
-import threshsig.GroupKey;
-import utils.KeyUtility;
-import utils.SerializationUtil;
-
-import main.Constants;
-import main.FileOperations;
 
 public class ClientStubTest {
 	private static ClientStub cs;
-	private static GroupKey gk;
 
 	@BeforeClass
 	public static void init() {
 		cs = new ClientStub(1, 2, 10000, 0);
-		ObjectInputStream ois;
 
 	}
 
@@ -62,7 +43,7 @@ public class ClientStubTest {
 			// CODEXMessage cm2 = new CODEXMessage(cm.getSerializedMessage());
 
 			PublicKey publicKey = KeyUtility
-					.getPublicKey(Constants.CONFIG_DIR + "/"
+					.getPublicKey(Constants.CONFIG_DIR + "0/"
 							+ Constants.CLIENT_PUBLIC_KEY_FILE
 							+ cs.getClientId());
 
@@ -108,8 +89,17 @@ public class ClientStubTest {
 				int tries = 0;
 				
 				//cs.getSecret("test");
-				cs.setSecret("test", "helloworld1", 10);
-				cs.getSecret("test");
+				cs.setSecret("test", "helloworld1");
+				cs.setSecret("test1", "helloworld2");
+//				cs.setSecret("test2", "helloworld3");
+//				cs.setSecret("test3", "helloworld4");
+//				cs.setSecret("test4", "helloworld5");
+//				cs.setSecret("test5", "helloworld6");
+//
+//				cs.setSecret("test6", "helloworld7");
+//				cs.setSecret("test7", "helloworld8");
+//				cs.setSecret("test8", "helloworld9");
+//				cs.getSecret("test5");
 				
 				//cs.getTimeStamp("test");
 				//while(!cs.setSecret("test3", "helloworld4") && tries++ < MAX_TRIES);

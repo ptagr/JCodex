@@ -72,7 +72,7 @@ public class ClientStub {
 	public void initKey() throws NoSuchAlgorithmException, InvalidKeyException {
 		if (privateKey == null) {
 
-			this.privateKey = KeyUtility.getPrivateKey(Constants.CONFIG_DIR
+			this.privateKey = KeyUtility.getPrivateKey(Constants.CLIENT_CONFIG_DIR + clientId
 					+ "/" + Constants.CLIENT_PRIVATE_KEY_FILE + this.clientId);
 
 		}
@@ -81,9 +81,9 @@ public class ClientStub {
 
 		try {
 			ObjectInputStream ois = new ObjectInputStream(new FileInputStream(
-					Constants.THRESHOLD_CONFIG_DIR + "/"
+					Constants.CLIENT_CONFIG_DIR+ clientId + "/"
 							+ Constants.THRESHOLD_GROUP_KEY_FILE));
-			gk = (GroupKey) ois.readObject();
+			gk = (GroupKey) ois.readObject();	
 
 			ois.close();
 		} catch (FileNotFoundException e) {
@@ -130,7 +130,7 @@ public class ClientStub {
 		byte[] dataToSend = SerializationUtil.serialize(cm);
 
 		// Send data over the channel to the delegate
-		ccm.sendMessage(dataToSend);
+		ccm.sendMessage(dataToSend, cm.getNonce());
 
 		while (true && ctu.timerHasNotExpired()) {
 			CODEXClientMessage cmm;
@@ -182,7 +182,7 @@ public class ClientStub {
 	}
 	
 	
-	public BigInteger getTimeStamp(String dataId) {
+	public Integer getTimeStamp(String dataId) {
 
 		ClientTimeUtility ctu = new ClientTimeUtility();
 		long nonce = new Random().nextInt();
@@ -214,7 +214,7 @@ public class ClientStub {
 		byte[] dataToSend = SerializationUtil.serialize(cm);
 
 		// Send data over the channel to the delegate
-		ccm.sendMessage(dataToSend);
+		ccm.sendMessage(dataToSend, cm.getNonce());
 
 		while (true && ctu.timerHasNotExpired()) {
 			CODEXClientMessage cmm;
@@ -235,7 +235,7 @@ public class ClientStub {
 								.deserialize(ccm2.getSerializedMessage());
 						if (ctr.getNonce() == ctr2.getNonce()) {
 
-							BigInteger ts = trr.getTimestamp();
+							Integer ts = trr.getTimestamp();
 
 							//BigInteger originalSecret = bs.divide(bp);
 							// BigInteger originalSecret = bs;
@@ -299,7 +299,7 @@ public class ClientStub {
 		byte[] dataToSend = SerializationUtil.serialize(cm);
 
 		// Send data over the channel to the delegate
-		ccm.sendMessage(dataToSend);
+		ccm.sendMessage(dataToSend, cm.getNonce());
 
 		while (true && ctu.timerHasNotExpired()) {
 			CODEXClientMessage cmm;
@@ -320,7 +320,7 @@ public class ClientStub {
 								.deserialize(ccm2.getSerializedMessage());
 						if (ctr.getNonce() == ctr2.getNonce()) {
 
-							BigInteger ts = trr.getTimestamp();
+							Integer ts = trr.getTimestamp();
 
 							//BigInteger originalSecret = bs.divide(bp);
 							// BigInteger originalSecret = bs;
@@ -352,6 +352,11 @@ public class ClientStub {
 		return null;
 	}
 	
+	
+	public boolean setSecret(String dataId, String secret){
+		while(!setSecret(dataId, secret, 2)){};
+		return true;
+	}
 	
 	public boolean setSecret(String dataId, String secret, int sleep) {
 
@@ -396,7 +401,7 @@ public class ClientStub {
 		byte[] dataToSend = SerializationUtil.serialize(cm);
 
 		// Send data over the channel to the delegate
-		ccm.sendMessage(dataToSend);
+		ccm.sendMessage(dataToSend, cm.getNonce());
 
 		while (ctu.timerHasNotExpired()) {
 			CODEXClientMessage cmm;
@@ -431,7 +436,7 @@ public class ClientStub {
 //									+ new String(originalSecret.toByteArray()));
 							
 							
-							//return true;
+							return true;
 						} else {
 							System.out.println("Cannot verify nonce");
 						}

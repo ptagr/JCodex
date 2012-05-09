@@ -55,7 +55,7 @@ public class ServerTest {
 //					.modPow(gk.getExponent(), gk.getModulus());
 //			s.addSecret("test", new SecretShare(BigInteger.ONE, cipher));
 			
-			s.addSecret("test", new SecretShare(BigInteger.ONE, cipher));
+			s.addSecret("test", new SecretShare(1, cipher));
 
 			// for (int i = 0; i < Integer.parseInt(args[0]); i++) {
 			new Thread(s).start();

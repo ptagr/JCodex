@@ -18,10 +18,10 @@ public class ForwardReadRequestAccept implements Serializable{
 	
 	private SigShare decryptedShare;
 	
-	private BigInteger timeStamp;
+	private Integer timeStamp;
 
 	public ForwardReadRequestAccept(BigInteger digitalSig, BigInteger cipher,
-			SigShare decryptedShare, BigInteger timestamp) {
+			SigShare decryptedShare, Integer timestamp) {
 		super();
 		this.setDigitalSig(digitalSig);
 		this.setCipher(cipher);
@@ -53,11 +53,11 @@ public class ForwardReadRequestAccept implements Serializable{
 		this.decryptedShare = decryptedShare;
 	}
 
-	public BigInteger getTimeStamp() {
+	public Integer getTimeStamp() {
 		return timeStamp;
 	}
 
-	public void setTimeStamp(BigInteger timeStamp) {
+	public void setTimeStamp(Integer timeStamp) {
 		this.timeStamp = timeStamp;
 	}
 	

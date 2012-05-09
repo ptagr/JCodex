@@ -2,7 +2,7 @@ package threshsig;
 
 import java.math.BigInteger;
 
-class Poly {
+public class Poly {
   private BigInteger[] coeff;
 
   private int size;

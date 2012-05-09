@@ -29,6 +29,8 @@ public class GroupKey implements Serializable{
 
 	/** The RSA modulus of the groupKeyPair */
 	private BigInteger n;
+	
+	private int keysize;
 
 	private BigInteger v;
 
@@ -41,6 +43,7 @@ public class GroupKey implements Serializable{
 		this.v = v;
 		this.e = e;
 		this.n = n;
+		this.setKeysize(keysize);
 	}
 
 	public GroupKey(final int k, final int l, final int keysize,
@@ -49,6 +52,7 @@ public class GroupKey implements Serializable{
 		this.l = l;
 		this.e = e;
 		this.n = n;
+		this.setKeysize(keysize);
 	}
 
 	/**
@@ -125,6 +129,14 @@ public class GroupKey implements Serializable{
 
 	public void setL(int l) {
 		this.l = l;
+	}
+
+	public int getKeysize() {
+		return keysize;
+	}
+
+	public void setKeysize(int keysize) {
+		this.keysize = keysize;
 	}
 	
 	
