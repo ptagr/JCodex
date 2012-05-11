@@ -64,7 +64,7 @@ public class StateManager {
 		return fname;
 	}
 
-	private void println(String string) {
+	private void println(Object string) {
 		System.out.println("State Manager " + this.getServerId() + " : "
 				+ string);
 
@@ -83,9 +83,10 @@ public class StateManager {
 	}
 
 	public void printState() {
-		for (String s : shareDB.keySet()) {
-			println(s + " : " + shareDB.get(s));
-		}
+//		for (String s : shareDB.keySet()) {
+//			println(s + " : " + shareDB.get(s));
+//		}
+		println(shareDB.size());
 	}
 
 	public Integer getTimestampFromDB(String dataId) {

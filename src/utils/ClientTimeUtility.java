@@ -2,7 +2,7 @@ package utils;
 
 public class ClientTimeUtility {
 
-	public static int timeOut = 10000; // time in mSec
+	public static int timeOut = 20000; // time in mSec
 	//public static int clientTimeOut = 4*timeOut; // time in mSec
 	public long milliSec;
 

@@ -353,23 +353,18 @@ public class ClientStub {
 	}
 	
 	
-	public boolean setSecret(String dataId, String secret){
-		while(!setSecret(dataId, secret, 2)){};
-		return true;
-	}
+//	public boolean setSecret(String dataId, String secret){
+//		while(!setSecret(dataId, secret, 2)){};
+//		return true;
+//	}
 	
-	public boolean setSecret(String dataId, String secret, int sleep) {
+	public boolean setSecret(String dataId, String secret) {
 
 		CODEXClientMessage ccm1 = getTimeStampMessage(dataId);
 		
 		if(ccm1 == null)
 			return false;
-		try {
-			Thread.sleep(sleep);
-		} catch (InterruptedException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
-		}
+		
 		
 		ClientTimeUtility ctu = new ClientTimeUtility();
 		long nonce = new Random().nextInt();

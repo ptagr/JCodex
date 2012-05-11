@@ -86,7 +86,12 @@ public class ClientStubTest {
 				//cs.getSecret("test");
 
 				int MAX_TRIES = 5;
-				int tries = 0;
+				
+				
+				for(int i=0;i<100;i++){
+					int tries = 0;
+					while(!cs.setSecret("test"+i, "helloworld"+i) && tries++ < MAX_TRIES);
+				}
 				
 				//cs.getSecret("test");
 				cs.setSecret("test", "helloworld1");
@@ -102,10 +107,13 @@ public class ClientStubTest {
 //				cs.getSecret("test5");
 				
 				//cs.getTimeStamp("test");
-				//while(!cs.setSecret("test3", "helloworld4") && tries++ < MAX_TRIES);
 				
-				tries = 0;
-				//while(cs.getSecret("test3") == null && tries++ < MAX_TRIES);
+				for(int i=0;i<100;i++){
+					int tries = 0;
+					while(cs.getSecret("test"+i) == null && tries++ < MAX_TRIES);
+				}
+				
+				//
 				//cs.getSecret("test3");
 			}
 		};

@@ -53,12 +53,12 @@ public class ProactiveRecoveryServer implements Runnable {
 	private ConnectionInfo payloadConnectionInfo;
 
 	private HashMap<String, SecretShare> shareDB;
-	
+
 	private HashMap<String, SecretShare> correctState = new HashMap<String, SecretShare>();
 
 	private Map<Integer, ConnectionInfo> serverConnectionInfo;
 
-	private static int wovDuration = 60000; // Duration of window of
+	private static int wovDuration = 10*60*1000; // Duration of window of
 											// vulnerability in ms
 
 	private volatile LinkedBlockingQueue<PRSServerMessage> serverMessages = new LinkedBlockingQueue<PRSServerMessage>(
@@ -122,7 +122,7 @@ public class ProactiveRecoveryServer implements Runnable {
 	@Override
 	public void run() {
 		TimeUtility wovTimer = new TimeUtility(wovDuration);
-		TimeUtility tu = new TimeUtility(5000);
+
 		TimeUtility methodTimer = new TimeUtility();
 
 		byte[] receiveData;
@@ -140,7 +140,8 @@ public class ProactiveRecoveryServer implements Runnable {
 
 			clientIds.add(0);
 
-			Server server = new Server(2, 5, 10000, prsId, clientIds, correctState);
+			Server server = new Server(2, 5, 10000, prsId, clientIds,
+					correctState);
 
 			new Thread(server).start();
 
@@ -153,9 +154,20 @@ public class ProactiveRecoveryServer implements Runnable {
 			println("the window of vulnerability ended. Starting rejuvenation procedure ...");
 
 			methodTimer.reset();
-			tu.reset();
-			// Wait for some delta time
-			while (tu.timerHasNotExpired())
+			// tu.reset();
+			// // Wait for some delta time
+			// while (tu.timerHasNotExpired())
+			// ;
+
+			// Now start the state recovery process
+			PRSServerSocketListener pssl = new PRSServerSocketListener();
+			Thread psslThread = new Thread(pssl);
+			psslThread.start();
+
+			// Wait for a 2*delta time or for other PRWs to be ready
+			TimeUtility twoDelta = new TimeUtility(2 * 5000);
+			twoDelta.reset();
+			while (twoDelta.timerHasNotExpired())
 				;
 
 			println("Delta waiting ended");
@@ -164,7 +176,10 @@ public class ProactiveRecoveryServer implements Runnable {
 			long nonce = sendDumpMessage();
 
 			// Wait for the state to arrive
-			while (true) {
+			TimeUtility stateTimer = new TimeUtility(30000);
+			stateTimer.reset();
+			this.shareDB = null;
+			while (true && stateTimer.timerHasNotExpired()) {
 				DatagramPacket receivePacket = new DatagramPacket(receiveData,
 						receiveData.length);
 				try {
@@ -195,27 +210,27 @@ public class ProactiveRecoveryServer implements Runnable {
 
 			}
 
-			// Now start the state recovery process
-			PRSServerSocketListener pssl = new PRSServerSocketListener();
-			Thread psslThread = new Thread(pssl);
-			psslThread.start();
-
-			// Wait for a delta time for other PRWs to be ready
-			tu.reset();
-			while (tu.timerHasNotExpired())
-				;
+			// if(shareDB != null){
+			// //Didnot receive the state from payload
+			// //Perhaps the payload is compromised
+			//
+			//
+			//
+			// }
 
 			println("< ------------- STATE RECOVERY PHASE ------------->");
 			// Now send the payload state to all other PRWs
+			// NOte that the shareDB might be null
 			SendStateMessage ssm = new SendStateMessage(this.shareDB,
 					this.getPrsId());
 			sendMessageToAllServers(ssm, PRSMessageType.SEND_STATE);
 
 			// Now wait for all other PRWs to send their state
 			Set<SendStateMessage> ssmSet = new HashSet<SendStateMessage>();
-			tu.reset();
+			stateTimer = new TimeUtility(stateTimer.getLocaltimeOut()+twoDelta.getLocaltimeOut());
+			stateTimer.reset();
 			int messagesReceived = 0;
-			while (tu.timerHasNotExpired()) {
+			while (stateTimer.timerHasNotExpired()) {
 				try {
 					if (messagesReceived == l)
 						break;
@@ -241,6 +256,7 @@ public class ProactiveRecoveryServer implements Runnable {
 				}
 			}
 
+			int nullstatecount = 0;
 			HashMap<String, TempState> temp = new HashMap<String, ProactiveRecoveryServer.TempState>();
 			if (ssmSet.size() == l) {
 				// Received l states
@@ -251,7 +267,7 @@ public class ProactiveRecoveryServer implements Runnable {
 						// Iterate over the shares in a single state
 						for (String key : tempssm.getShareDB().keySet()) {
 							SecretShare ss = tempssm.getShareDB().get(key);
-							println(key + " - "+ss);
+							println(key + " - " + ss);
 							try {
 								MessageDigest md = MessageDigest
 										.getInstance("SHA");
@@ -271,6 +287,12 @@ public class ProactiveRecoveryServer implements Runnable {
 								e.printStackTrace();
 							}
 
+						}
+					}else{
+						nullstatecount++;
+						if(nullstatecount > t){
+							//Received more than threshold null states
+							notifyadmin("Received more than threshold null states");
 						}
 					}
 				}
@@ -315,9 +337,9 @@ public class ProactiveRecoveryServer implements Runnable {
 
 			// Now wait for all other PRWs to send their secrets
 			Set<BigInteger> secretSet = new HashSet<BigInteger>();
-			tu.reset();
+			stateTimer.reset();
 			messagesReceived = 0;
-			while (tu.timerHasNotExpired()) {
+			while (stateTimer.timerHasNotExpired()) {
 				try {
 					if (messagesReceived == l)
 						break;
@@ -338,6 +360,10 @@ public class ProactiveRecoveryServer implements Runnable {
 					e.printStackTrace();
 				}
 			}
+			
+			if(messagesReceived < l){
+				notifyadmin("Didnt receive the required number of secrets in renewal phase");
+			}
 
 			// Received all the secrets from other PRWs
 			// Update the current secret using these secrets
@@ -353,9 +379,9 @@ public class ProactiveRecoveryServer implements Runnable {
 
 			// Now wait for all other PRWs to send their verifiers
 			BigInteger verifierSet[] = new BigInteger[l];
-			tu.reset();
+			stateTimer.reset();
 			messagesReceived = 0;
-			while (tu.timerHasNotExpired()) {
+			while (stateTimer.timerHasNotExpired()) {
 				try {
 					if (messagesReceived == l && checkArray(verifierSet))
 						break;
@@ -378,6 +404,12 @@ public class ProactiveRecoveryServer implements Runnable {
 				}
 			}
 
+			if(messagesReceived < l){
+				notifyadmin("Didnt receive the required number of verifiers in renewal phase");
+			}else if(!checkArray(verifierSet)){
+				notifyadmin("Received null verifiers in renewal phase");
+			}
+			
 			// Now that we have received verfiers from other PRWs, update the
 			// keyshares and group keys
 			stkm.updateVerifiers(verifierSet);
@@ -387,8 +419,14 @@ public class ProactiveRecoveryServer implements Runnable {
 					+ methodTimer.delta() + " ms");
 
 			wovTimer.reset();
-			tu.reset();
+			stateTimer.reset();
 		}
+	}
+
+	private void notifyadmin(String string) {
+		// TODO Auto-generated method stub
+		System.out.println(string);
+		System.exit(0);
 	}
 
 	public boolean checkArray(Object[] array) {

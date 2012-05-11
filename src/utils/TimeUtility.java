@@ -35,4 +35,14 @@ public class TimeUtility {
 	public void reset(){
 		this.milliSec = System.currentTimeMillis();
 	}
+
+	public int getLocaltimeOut() {
+		return localtimeOut;
+	}
+
+	public void setLocaltimeOut(int localtimeOut) {
+		this.localtimeOut = localtimeOut;
+	}
+	
+	
 }
